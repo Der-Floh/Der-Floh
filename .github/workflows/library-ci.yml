@@ -26,11 +26,6 @@ on:
         required: false
         default: ''
         type: string
-      excluded-rules:
-        description: Comma separated package validation rule names to skip
-        required: false
-        default: PackageIdAvailableOnNuGetOrg
-        type: string
       excluded-rule-ids:
         description: >
           Comma separated package validation rule ids to skip. 119 is always added, since a
@@ -143,7 +138,6 @@ jobs:
           package-dir: ${{ inputs.artifacts-path }}
           package-id: ${{ inputs.package-id }}
           version: ${{ steps.version.outputs.value }}
-          excluded-rules: ${{ inputs.excluded-rules }}
           excluded-rule-ids: ${{ inputs.excluded-rule-ids && format('{0},119', inputs.excluded-rule-ids) || '119' }}
 
       - name: Archive package

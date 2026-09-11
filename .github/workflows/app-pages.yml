@@ -16,11 +16,6 @@ on:
         required: false
         default: ''
         type: string
-      stamp-version:
-        description: Whether to resolve a version and stamp it into the build
-        required: false
-        default: true
-        type: boolean
       publish-dir:
         description: Directory dotnet publish writes to
         required: false
@@ -69,7 +64,6 @@ jobs:
 
       - name: Resolve version
         id: version
-        if: ${{ inputs.stamp-version }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,7 +94,7 @@ jobs:
         run: >
           dotnet publish "${{ inputs.project-path }}" -c Release --nologo
           -o "./${{ inputs.publish-dir }}"
-          ${{ steps.version.outputs.value && format('-p:Version={0}', steps.version.outputs.value) || '' }}
+          -p:Version=${{ steps.version.outputs.value }}
           -clp:ForceConsoleColor
 
       - name: Copy index.html to 404.html
