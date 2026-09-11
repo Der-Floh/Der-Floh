@@ -30,7 +30,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 
 | Reusable workflow | Purpose |
 | --- | --- |
-| `library-ci.yml` | Build matrix, pack a preview, verify it |
+| `library-ci.yml` | Build matrix, optional test job, pack a preview, verify it |
 | `app-ci.yml` | Build matrix, optional Windows publish smoke test |
 
 ## Consuming: a library
@@ -58,7 +58,12 @@ jobs:
     with:
       project-path: RegJump/RegJump.csproj
       package-id: RegJump
+      test-project: RegJump.Test/RegJump.Test.csproj
 ```
+
+`test-project` is optional. Leave it out and the `Test` job is skipped; the rest of the
+workflow is unaffected. When it is set the job runs on `windows-latest`, so tests that need
+the registry or a real process actually execute.
 
 `.github/workflows/publish.yml` — note this stays a real workflow in the product
 repository rather than a reusable one, for the reason below:

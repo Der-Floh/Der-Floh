@@ -21,6 +21,11 @@ on:
         required: false
         default: '["ubuntu-latest", "windows-latest"]'
         type: string
+      test-project:
+        description: Test project to run. Leave empty to skip the test job
+        required: false
+        default: ''
+        type: string
       artifacts-path:
         description: Directory the package is written to
         required: false
@@ -60,6 +65,42 @@ jobs:
 
       - name: Build
         run: dotnet build ${{ inputs.project-path }} -c Release --no-restore -clp:ForceConsoleColor
+
+  test:
+    name: Test
+    if: ${{ inputs.test-project != '' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: Der-Floh/Der-Floh/.github/actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Restore
+        run: dotnet restore ${{ inputs.test-project }} -clp:ForceConsoleColor
+
+      - name: Build
+        run: dotnet build ${{ inputs.test-project }} -c Release --no-restore -clp:ForceConsoleColor
+
+      - name: Test
+        run: >
+          dotnet test ${{ inputs.test-project }} -c Release --no-build
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory ./${{ inputs.artifacts-path }}/test
+          -clp:ForceConsoleColor
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results
+          path: ./${{ inputs.artifacts-path }}/test
+          if-no-files-found: warn
+          retention-days: ${{ inputs.retention-days }}
 
   package:
     name: Package
