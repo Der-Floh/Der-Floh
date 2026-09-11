@@ -33,6 +33,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `library-ci.yml` | Build matrix, optional test job, pack a preview, verify it |
 | `app-ci.yml` | Build matrix, optional Windows publish smoke test |
 | `app-publish.yml` | Publish, MSI, archive, attest, release upload and WinGet submission |
+| `app-publish-winget.yml` | Resubmit an existing release to WinGet, from its archived manifests |
 
 ## Consuming: a library
 
