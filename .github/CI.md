@@ -32,6 +32,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | --- | --- |
 | `library-ci.yml` | Build matrix, optional test job, pack a preview, verify it |
 | `app-ci.yml` | Build matrix, optional Windows publish smoke test |
+| `app-publish.yml` | Publish, MSI, archive, attest, release upload and WinGet submission |
 
 ## Consuming: a library
 
@@ -148,7 +149,45 @@ jobs:
           nuget-user: Der-Floh
 ```
 
-## Why publishing is not a reusable workflow
+## Consuming: an app
+
+```yaml
+name: Publish Release
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: winget-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    uses: Der-Floh/Der-Floh/.github/workflows/app-publish.yml@v1
+    with:
+      project-path: Cursor_Installer_Creator.Desktop/Cursor_Installer_Creator.Desktop.csproj
+      publish-path: Cursor_Installer_Creator.Desktop/bin/Publish
+      aip-path: .github/CursorInstallerCreator.aip
+      product-name: Cursor Installer Creator
+      package-name: CursorInstallerCreator
+      winget-package-id: Der_Floh.CursorInstallerCreator
+    secrets:
+      ADVINST_LICENSE_KEY: ${{ secrets.ADVINST_LICENSE_KEY }}
+      WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+```
+
+The secrets have to be set on the **calling** repository. A reusable workflow never sees the
+secrets of the repository that stores it — this repository is public, so if it did, anyone
+could call the workflow and run it with these credentials. The permissions block is also
+required on the caller: a reusable workflow cannot grant itself more than the caller has.
+
+## Why NuGet publishing is not a reusable workflow
 
 nuget.org's trusted publishing matches the repository embedded in the OIDC
 `job_workflow_ref` claim against the `repository` claim, and requires them to agree.

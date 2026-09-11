@@ -1,0 +1,203 @@
+name: App Publish
+
+# Unlike the library side, this job can live here: WinGet publishing authenticates with a
+# PAT the caller passes in, so there is no OIDC trust policy tying the credential to the
+# repository that defines the job. Build provenance attestations are still recorded against
+# the calling repository.
+
+on:
+  workflow_call:
+    inputs:
+      project-path:
+        description: Desktop project to publish
+        required: true
+        type: string
+      publish-path:
+        description: Directory the publish profile writes its output to
+        required: true
+        type: string
+      aip-path:
+        description: Path to the Advanced Installer project file
+        required: true
+        type: string
+      product-name:
+        description: Display name the installer registers in Programs and Features
+        required: true
+        type: string
+      package-name:
+        description: Base name of the released archive, without version or target
+        required: true
+        type: string
+      winget-package-id:
+        description: WinGet package identifier, in Publisher.PackageName form
+        required: true
+        type: string
+      dotnet-version:
+        description: SDK version selector
+        required: false
+        default: "10.0.x"
+        type: string
+      publish-profile:
+        description: Publish profile to build with
+        required: false
+        default: winx64
+        type: string
+      target:
+        description: Runtime identifier the release is built for
+        required: false
+        default: win-x64
+        type: string
+      file-type:
+        description: Extension of the released installer
+        required: false
+        default: msi
+        type: string
+      artifacts-path:
+        description: Directory the installer and archive are written to
+        required: false
+        default: artifacts
+        type: string
+      manifest-artifact:
+        description: Name of the uploaded WinGet manifest artifact
+        required: false
+        default: winget-manifests
+        type: string
+      retention-days:
+        description: How long to keep the WinGet manifest artifact
+        required: false
+        default: 90
+        type: number
+    secrets:
+      ADVINST_LICENSE_KEY:
+        description: Advanced Installer license key
+        required: true
+      WINGET_CREATE_GITHUB_TOKEN:
+        description: GitHub PAT used to submit to the WinGet repository
+        required: true
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+
+jobs:
+  publish:
+    runs-on: windows-latest
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: version
+        uses: Der-Floh/Der-Floh/.github/actions/resolve-version@v1
+        with:
+          tag: ${{ github.event.release.tag_name }}
+          allow-prerelease: "false"
+
+      - name: Setup .NET
+        uses: Der-Floh/Der-Floh/.github/actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Publish
+        run: >
+          dotnet publish ${{ inputs.project-path }}
+          -p:PublishProfile=${{ inputs.publish-profile }}
+          -p:Version=${{ steps.version.outputs.value }}
+          -clp:ForceConsoleColor
+
+      - name: Create MSI
+        id: msi
+        uses: Der-Floh/Der-Floh/.github/actions/create-msi@v1
+        with:
+          aip-path: ${{ inputs.aip-path }}
+          version: ${{ steps.version.outputs.value }}
+          output-dir: ${{ inputs.artifacts-path }}
+          advinst-license: ${{ secrets.ADVINST_LICENSE_KEY }}
+
+      - name: Verify MSI
+        uses: Der-Floh/Der-Floh/.github/actions/verify-msi@v1
+        with:
+          installer-path: ${{ steps.msi.outputs.installer-path }}
+          product-name: ${{ inputs.product-name }}
+          version: ${{ steps.version.outputs.value }}
+
+      - name: Create ZIP
+        uses: Der-Floh/Der-Floh/.github/actions/create-zip@v1
+        with:
+          name: ${{ inputs.package-name }}
+          version: ${{ steps.version.outputs.value }}
+          target: ${{ inputs.target }}
+          source-path: ${{ inputs.publish-path }}
+          output-dir: ${{ inputs.artifacts-path }}
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            ./${{ inputs.artifacts-path }}/*.zip
+            ./${{ inputs.artifacts-path }}/*.msi
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            ./${{ inputs.artifacts-path }}/*.msi
+            ./${{ inputs.artifacts-path }}/*.zip
+
+      - name: Resolve release asset
+        id: asset
+        uses: Der-Floh/Der-Floh/.github/actions/resolve-release-asset@v1
+        with:
+          repository: ${{ github.repository }}
+          tag: ${{ github.event.release.tag_name }}
+          version: ${{ steps.version.outputs.value }}
+          target: ${{ inputs.target }}
+          file-type: ${{ inputs.file-type }}
+          token: ${{ github.token }}
+
+      - name: Verify WinGet manifest
+        uses: Der-Floh/Der-Floh/.github/actions/verify-manifest@v1
+        with:
+          manifest-path: ${{ steps.msi.outputs.manifest-dir }}
+          installer-url: ${{ steps.asset.outputs.url }}
+          installer-sha256: ${{ steps.asset.outputs.sha256 }}
+
+      - name: Archive WinGet manifests
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.manifest-artifact }}
+          path: ${{ steps.msi.outputs.manifest-dir }}
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
+
+      - name: Resolve WinGet submission mode
+        id: winget
+        if: ${{ !github.event.release.prerelease }}
+        uses: Der-Floh/Der-Floh/.github/actions/resolve-winget-mode@v1
+        with:
+          package-id: ${{ inputs.winget-package-id }}
+          version: ${{ steps.version.outputs.value }}
+          token: ${{ github.token }}
+
+      - name: Create WinGet package
+        if: ${{ steps.winget.outputs.mode == 'create' }}
+        uses: Der-Floh/Der-Floh/.github/actions/winget-publish@v1
+        with:
+          manifest-path: ${{ steps.msi.outputs.manifest-dir }}
+          token: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+
+      - name: Update WinGet package
+        if: ${{ steps.winget.outputs.mode == 'update' }}
+        uses: Der-Floh/Der-Floh/.github/actions/winget-update@v1
+        with:
+          package-id: ${{ inputs.winget-package-id }}
+          version: ${{ steps.version.outputs.value }}
+          installer-url: ${{ steps.asset.outputs.url }}
+          token: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
