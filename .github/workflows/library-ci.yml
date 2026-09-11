@@ -1,0 +1,104 @@
+name: Library CI
+
+on:
+  workflow_call:
+    inputs:
+      project-path:
+        description: Library project to build and pack
+        required: true
+        type: string
+      package-id:
+        description: NuGet package id the project produces
+        required: true
+        type: string
+      dotnet-version:
+        description: SDK version selector
+        required: false
+        default: "10.0.x"
+        type: string
+      build-os:
+        description: JSON array of runners to build on
+        required: false
+        default: '["ubuntu-latest", "windows-latest"]'
+        type: string
+      artifacts-path:
+        description: Directory the package is written to
+        required: false
+        default: artifacts
+        type: string
+      retention-days:
+        description: How long to keep the packed preview
+        required: false
+        default: 14
+        type: number
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(inputs.build-os) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: Der-Floh/Der-Floh/.github/actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Restore
+        run: dotnet restore ${{ inputs.project-path }} -clp:ForceConsoleColor
+
+      - name: Build
+        run: dotnet build ${{ inputs.project-path }} -c Release --no-restore -clp:ForceConsoleColor
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: Der-Floh/Der-Floh/.github/actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Resolve preview version
+        id: version
+        run: echo "value=0.0.0-ci.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Pack
+        uses: Der-Floh/Der-Floh/.github/actions/pack@v1
+        with:
+          project-path: ${{ inputs.project-path }}
+          version: ${{ steps.version.outputs.value }}
+          output-dir: ${{ inputs.artifacts-path }}
+
+      - name: Verify package
+        uses: Der-Floh/Der-Floh/.github/actions/verify-package@v1
+        with:
+          package-dir: ${{ inputs.artifacts-path }}
+          package-id: ${{ inputs.package-id }}
+          version: ${{ steps.version.outputs.value }}
+          excluded-rule-ids: "119"
+
+      - name: Archive package
+        uses: actions/upload-artifact@v7
+        with:
+          name: nuget-package
+          path: |
+            ${{ inputs.artifacts-path }}/*.nupkg
+            ${{ inputs.artifacts-path }}/*.snupkg
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

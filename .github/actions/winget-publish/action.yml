@@ -1,0 +1,30 @@
+name: Create WinGet Package
+description: Submits generated WinGet manifests to create a package in the WinGet repository
+
+# The setup-wingetcreate reference below is absolute rather than ./.github/actions/...
+# because a relative path inside an action resolves against the calling repository's
+# workspace, which does not contain this repository's actions. Bump the @ref here when
+# cutting a new major tag.
+
+inputs:
+  manifest-path:
+    description: Path to the directory containing the WinGet manifests
+    required: true
+  token:
+    description: GitHub PAT for submitting PR to the WinGet repository
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Setup wingetcreate
+      id: wingetcreate
+      uses: Der-Floh/Der-Floh/.github/actions/setup-wingetcreate@v1
+
+    - name: Submit manifests to WinGet
+      shell: pwsh
+      env:
+        WINGET_CREATE_GITHUB_TOKEN: ${{ inputs.token }}
+      run: |
+        if (-not (Test-Path -Path '${{ inputs.manifest-path }}')) { throw "Manifest path not found: ${{ inputs.manifest-path }}" }
+        & '${{ steps.wingetcreate.outputs.path }}' submit --no-open '${{ inputs.manifest-path }}'

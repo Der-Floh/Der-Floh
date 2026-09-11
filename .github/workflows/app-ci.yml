@@ -1,0 +1,78 @@
+name: App CI
+
+on:
+  workflow_call:
+    inputs:
+      projects:
+        description: >
+          JSON array of build targets. Each entry is {"name": "...", "project": "...", "wasm": true|false}.
+        required: true
+        type: string
+      dotnet-version:
+        description: SDK version selector
+        required: false
+        default: "10.0.x"
+        type: string
+      publish-project:
+        description: Project to smoke-publish on Windows. Leave empty to skip that job
+        required: false
+        default: ''
+        type: string
+      publish-profile:
+        description: Publish profile used for the Windows publish job
+        required: false
+        default: winx64
+        type: string
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.projects) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: Der-Floh/Der-Floh/.github/actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Install wasm-tools
+        if: matrix.wasm
+        run: dotnet workload install wasm-tools
+
+      - name: Restore
+        run: dotnet restore ${{ matrix.project }} -clp:ForceConsoleColor
+
+      - name: Build
+        run: dotnet build ${{ matrix.project }} -c Release --no-restore -clp:ForceConsoleColor
+
+  publish-desktop:
+    name: Publish desktop
+    if: ${{ inputs.publish-project != '' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: Der-Floh/Der-Floh/.github/actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Publish
+        run: >
+          dotnet publish ${{ inputs.publish-project }}
+          -p:PublishProfile=${{ inputs.publish-profile }}
+          -clp:ForceConsoleColor

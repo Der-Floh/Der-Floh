@@ -1,0 +1,76 @@
+name: Verify NuGet Package
+description: Asserts pack produced the expected files and validates them against NuGet packaging rules
+
+inputs:
+  package-dir:
+    description: Directory holding the packed .nupkg and .snupkg
+    required: false
+    default: artifacts
+  package-id:
+    description: Expected package id (e.g. RegJump)
+    required: true
+  version:
+    description: Expected package version (without v prefix)
+    required: true
+  excluded-rules:
+    description: Comma separated validation rule names to skip
+    required: false
+    default: PackageIdAvailableOnNuGetOrg
+  excluded-rule-ids:
+    description: Comma separated validation rule ids to skip. Pass 119 on pull requests, whose merge commit sources are not reachable yet
+    required: false
+    default: ''
+  validator-version:
+    description: Pinned version of Meziantou.Framework.NuGetPackageValidation.Tool
+    required: false
+    default: 2.0.8
+
+outputs:
+  package-path:
+    description: Path of the verified .nupkg
+    value: ${{ steps.paths.outputs.package-path }}
+  symbols-path:
+    description: Path of the verified .snupkg
+    value: ${{ steps.paths.outputs.symbols-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve package paths
+      id: paths
+      shell: bash
+      env:
+        PACKAGE: ${{ inputs.package-dir }}/${{ inputs.package-id }}.${{ inputs.version }}.nupkg
+        SYMBOLS: ${{ inputs.package-dir }}/${{ inputs.package-id }}.${{ inputs.version }}.snupkg
+      run: |
+        for file in "$PACKAGE" "$SYMBOLS"; do
+          if [ ! -f "$file" ]; then
+            echo "::error::pack did not produce $file"
+            exit 1
+          fi
+        done
+        echo "package-path=$PACKAGE" >> "$GITHUB_OUTPUT"
+        echo "symbols-path=$SYMBOLS" >> "$GITHUB_OUTPUT"
+
+    - name: Validate package
+      shell: bash
+      env:
+        PACKAGE_PATH: ${{ steps.paths.outputs.package-path }}
+        EXCLUDED_RULES: ${{ inputs.excluded-rules }}
+        EXCLUDED_RULE_IDS: ${{ inputs.excluded-rule-ids }}
+        VALIDATOR_VERSION: ${{ inputs.validator-version }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        tools="$RUNNER_TEMP/nuget-validation-tool"
+        dotnet tool install --tool-path "$tools" \
+          Meziantou.Framework.NuGetPackageValidation.Tool --version "$VALIDATOR_VERSION"
+
+        args=(--github-token "$GH_TOKEN")
+        if [ -n "$EXCLUDED_RULES" ]; then
+          args+=(--excluded-rules "$EXCLUDED_RULES")
+        fi
+        if [ -n "$EXCLUDED_RULE_IDS" ]; then
+          args+=(--excluded-rule-ids "$EXCLUDED_RULE_IDS")
+        fi
+
+        "$tools/meziantou.validate-nuget-package" "$PACKAGE_PATH" "${args[@]}"

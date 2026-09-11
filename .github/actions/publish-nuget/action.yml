@@ -1,0 +1,50 @@
+name: Publish to NuGet.org
+description: Exchanges the job's OIDC token for a short-lived API key and pushes the package and its symbols
+
+# Runs as steps inside the calling job, so the OIDC token still describes the calling
+# repository and workflow. A reusable workflow would not: nuget.org matches the repository
+# embedded in job_workflow_ref against the repository claim, and those differ once the job
+# is defined in another repository.
+
+inputs:
+  package-path:
+    description: Path of the .nupkg to push
+    required: true
+  symbols-path:
+    description: Path of the .snupkg to push. Leave empty to skip symbols
+    required: false
+    default: ''
+  nuget-user:
+    description: nuget.org username (profile name, not an email address)
+    required: true
+  source:
+    description: NuGet source to push to
+    required: false
+    default: https://api.nuget.org/v3/index.json
+
+runs:
+  using: composite
+  steps:
+    - name: NuGet login
+      id: login
+      uses: NuGet/login@v1
+      with:
+        user: ${{ inputs.nuget-user }}
+
+    - name: Push package
+      shell: bash
+      run: >
+        dotnet nuget push "${{ inputs.package-path }}"
+        --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
+        --source "${{ inputs.source }}"
+        --skip-duplicate
+
+    - name: Push symbols
+      if: ${{ inputs.symbols-path != '' }}
+      continue-on-error: true
+      shell: bash
+      run: >
+        dotnet nuget push "${{ inputs.symbols-path }}"
+        --api-key "${{ steps.login.outputs.NUGET_API_KEY }}"
+        --source "${{ inputs.source }}"
+        --skip-duplicate

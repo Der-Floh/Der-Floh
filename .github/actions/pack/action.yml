@@ -1,0 +1,40 @@
+name: Pack NuGet Package
+description: Restores, builds and packs a library as a deterministic CI build
+
+inputs:
+  project-path:
+    description: Project to pack
+    required: true
+  version:
+    description: Version stamped into the assembly and the package (without v prefix)
+    required: true
+  output-dir:
+    description: Directory the .nupkg and .snupkg are written to
+    required: false
+    default: artifacts
+
+runs:
+  using: composite
+  steps:
+    - name: Restore
+      shell: bash
+      run: dotnet restore "${{ inputs.project-path }}" -clp:ForceConsoleColor
+
+    - name: Build
+      shell: bash
+      run: >
+        dotnet build "${{ inputs.project-path }}"
+        -c Release --no-restore
+        -p:Version=${{ inputs.version }}
+        -p:ContinuousIntegrationBuild=true
+        -clp:ForceConsoleColor
+
+    - name: Pack
+      shell: bash
+      run: >
+        dotnet pack "${{ inputs.project-path }}"
+        -c Release --no-build
+        -p:Version=${{ inputs.version }}
+        -p:ContinuousIntegrationBuild=true
+        -o "${{ inputs.output-dir }}"
+        -clp:ForceConsoleColor
