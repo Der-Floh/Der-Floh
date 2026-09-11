@@ -31,6 +31,13 @@ on:
         required: false
         default: PackageIdAvailableOnNuGetOrg
         type: string
+      excluded-rule-ids:
+        description: >
+          Comma separated package validation rule ids to skip. 119 is always added, since a
+          pull request builds a merge commit whose sources are not fetchable yet.
+        required: false
+        default: ''
+        type: string
       artifacts-path:
         description: Directory the package is written to
         required: false
@@ -137,7 +144,7 @@ jobs:
           package-id: ${{ inputs.package-id }}
           version: ${{ steps.version.outputs.value }}
           excluded-rules: ${{ inputs.excluded-rules }}
-          excluded-rule-ids: "119"
+          excluded-rule-ids: ${{ inputs.excluded-rule-ids && format('{0},119', inputs.excluded-rule-ids) || '119' }}
 
       - name: Archive package
         uses: actions/upload-artifact@v7
