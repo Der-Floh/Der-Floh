@@ -1,0 +1,116 @@
+name: App Pages
+
+# Deploys a .NET wasm app to GitHub Pages. The version is taken from the release that
+# triggered the caller, else from a version passed in, else from the caller's latest
+# release, so a manual run without arguments republishes what is currently released.
+
+on:
+  workflow_call:
+    inputs:
+      project-path:
+        description: Browser project to publish
+        required: true
+        type: string
+      version:
+        description: Version to publish. Falls back to the release tag, then the latest release
+        required: false
+        default: ''
+        type: string
+      publish-dir:
+        description: Directory dotnet publish writes to
+        required: false
+        default: publish-output
+        type: string
+      output-subdir:
+        description: Folder inside publish-dir that is deployed
+        required: false
+        default: wwwroot
+        type: string
+      dotnet-version:
+        description: SDK version selector
+        required: false
+        default: "10.0.x"
+        type: string
+      branch:
+        description: Branch the site is deployed to
+        required: false
+        default: gh-pages
+        type: string
+      install-wasm-tools:
+        description: Whether the wasm-tools workload is required
+        required: false
+        default: true
+        type: boolean
+      spa-fallback:
+        description: Whether to copy index.html to 404.html so client-side routes resolve
+        required: false
+        default: true
+        type: boolean
+
+env:
+  DOTNET_NOLOGO: "true"
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
+
+jobs:
+  deploy-to-github-pages:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          ref="${RELEASE_TAG:-$INPUT_VERSION}"
+          if [ -z "$ref" ]; then
+            ref="$(gh release view --json tagName -q .tagName)"
+          fi
+          value="${ref#v}"
+          if [[ ! "$value" =~ ^[0-9]+(\.[0-9]+){0,3}$ ]]; then
+            echo "::error::'$ref' is not a version."
+            exit 1
+          fi
+          echo "value=$value" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET
+        uses: Der-Floh/Der-Floh/.github/actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Install wasm-tools
+        if: ${{ inputs.install-wasm-tools }}
+        run: dotnet workload install wasm-tools
+
+      - name: Publish .NET Project
+        run: >
+          dotnet publish "${{ inputs.project-path }}" -c Release --nologo
+          -o "./${{ inputs.publish-dir }}"
+          -p:Version=${{ steps.version.outputs.value }}
+          -clp:ForceConsoleColor
+
+      - name: Copy index.html to 404.html
+        if: ${{ inputs.spa-fallback }}
+        env:
+          OUTPUT_PATH: ${{ inputs.publish-dir }}/${{ inputs.output-subdir }}
+        run: cp "$OUTPUT_PATH/index.html" "$OUTPUT_PATH/404.html"
+
+      - name: Add .nojekyll file
+        env:
+          OUTPUT_PATH: ${{ inputs.publish-dir }}/${{ inputs.output-subdir }}
+        run: touch "$OUTPUT_PATH/.nojekyll"
+
+      - name: Deploy to gh-pages
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          branch: ${{ inputs.branch }}
+          folder: ${{ inputs.publish-dir }}/${{ inputs.output-subdir }}
+          single-commit: true

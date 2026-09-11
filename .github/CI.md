@@ -34,6 +34,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `app-ci.yml` | Build matrix, optional Windows publish smoke test |
 | `app-publish.yml` | Publish, MSI, archive, attest, release upload and WinGet submission |
 | `app-publish-winget.yml` | Resubmit an existing release to WinGet, from its archived manifests |
+| `app-pages.yml` | Publish a .NET wasm app to GitHub Pages |
 
 ## Consuming: a library
 
