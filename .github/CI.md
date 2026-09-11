@@ -65,6 +65,25 @@ jobs:
 workflow is unaffected. When it is set the job runs on `windows-latest`, so tests that need
 the registry or a real process actually execute.
 
+The test job runs `dotnet test` in **Microsoft.Testing.Platform mode**, which the .NET 10 SDK
+requires for MTP-based frameworks such as xunit.v3 4. A consuming repository must therefore:
+
+1. Opt in, with a `global.json` at its root:
+
+   ```json
+   {
+     "test": {
+       "runner": "Microsoft.Testing.Platform"
+     }
+   }
+   ```
+
+2. Reference `Microsoft.Testing.Extensions.TrxReport` from the test project. `--report-trx` is
+   not built into the platform, and without the extension the run fails with exit code 5.
+
+Without both, the job fails with *"Testing with VSTest target is no longer supported by
+Microsoft.Testing.Platform on .NET 10 SDK and later"*.
+
 `.github/workflows/publish.yml` — note this stays a real workflow in the product
 repository rather than a reusable one, for the reason below:
 

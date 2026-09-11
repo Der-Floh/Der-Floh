@@ -88,10 +88,9 @@ jobs:
 
       - name: Test
         run: >
-          dotnet test ${{ inputs.test-project }} -c Release --no-build
-          --logger "trx;LogFileName=test-results.trx"
+          dotnet test --project ${{ inputs.test-project }} -c Release --no-build
+          --report-trx --report-trx-filename test-results.trx
           --results-directory ./${{ inputs.artifacts-path }}/test
-          -clp:ForceConsoleColor
 
       - name: Upload test results
         if: always()
