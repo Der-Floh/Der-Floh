@@ -96,7 +96,7 @@ jobs:
       - name: Test
         run: >
           dotnet test --project ${{ inputs.test-project }} -c Release --no-build
-          --report-trx --report-trx-filename test-results.trx
+          --report-trx
           --results-directory ./${{ inputs.artifacts-path }}/test
 
       - name: Upload test results
