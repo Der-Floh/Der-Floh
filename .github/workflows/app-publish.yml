@@ -1,97 +1,60 @@
 name: App Publish
 
-# Unlike the library side, this job can live here: WinGet publishing authenticates with a
-# PAT the caller passes in, so there is no OIDC trust policy tying the credential to the
-# repository that defines the job. Build provenance attestations are still recorded against
-# the calling repository.
-
 on:
   workflow_call:
     inputs:
       project-path:
-        description: Desktop project to publish
+        description: Desktop project to publish. It must reference the Velopack package
         required: true
         type: string
-      publish-path:
-        description: Directory the publish profile writes its output to
-        required: true
-        type: string
-      aip-path:
-        description: Path to the Advanced Installer project file
-        required: true
-        type: string
-      product-name:
-        description: Display name the installer registers in Programs and Features
+      author:
+        description: Publisher of the app. It is shown in Apps & Features and is the first part of the WinGet identifier
         required: true
         type: string
       package-name:
-        description: Base name of the released archive, without version or target
+        description: Package name without spaces. It names the install folder and the released files and is the second part of the WinGet identifier, so it must never change after the first release
         required: true
         type: string
-      winget-package-id:
-        description: WinGet package identifier, in Publisher.PackageName form
-        required: true
-        type: string
-      dotnet-version:
-        description: SDK version selector
+      splash-image:
+        description: Image shown while the installer runs
         required: false
-        default: "10.0.x"
+        default: ''
         type: string
       publish-profile:
         description: Publish profile to build with
         required: false
         default: winx64
         type: string
-      target:
-        description: Runtime identifier the release is built for
+      runtimes:
+        description: JSON array of runtime identifiers to release installers for
         required: false
-        default: win-x64
+        default: '["win-x64", "win-x86", "win-arm64"]'
         type: string
-      file-type:
-        description: Extension of the released installer
+      dotnet-version:
+        description: SDK version selector
         required: false
-        default: msi
+        default: "10.0.x"
         type: string
-      artifacts-path:
-        description: Directory the installer and archive are written to
-        required: false
-        default: artifacts
-        type: string
-      manifest-artifact:
-        description: Name of the uploaded WinGet manifest artifact
-        required: false
-        default: winget-manifests
-        type: string
-      retention-days:
-        description: How long to keep the WinGet manifest artifact
-        required: false
-        default: 90
-        type: number
     secrets:
-      ADVINST_LICENSE_KEY:
-        description: Advanced Installer license key
-        required: true
       WINGET_CREATE_GITHUB_TOKEN:
         description: GitHub PAT used to submit to the WinGet repository
-        required: true
+        required: false
 
 env:
   DOTNET_NOLOGO: "true"
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "true"
 
 jobs:
-  publish:
-    runs-on: windows-latest
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
 
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
+    permissions: {}
+
+    outputs:
+      value: ${{ steps.version.outputs.value }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
       - name: Resolve version
         id: version
         uses: Der-Floh/Der-Floh/.github/actions/resolve-version@v1
@@ -99,105 +62,120 @@ jobs:
           tag: ${{ github.event.release.tag_name }}
           allow-prerelease: "false"
 
+  pack:
+    name: Pack ${{ matrix.runtime }}
+    needs: version
+    runs-on: windows-latest
+
+    permissions:
+      contents: read
+
+    strategy:
+      matrix:
+        runtime: ${{ fromJSON(inputs.runtimes) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
       - name: Setup .NET
         uses: Der-Floh/Der-Floh/.github/actions/setup-dotnet@v1
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
 
-      - name: Publish
-        run: >
-          dotnet publish ${{ inputs.project-path }}
-          -p:PublishProfile=${{ inputs.publish-profile }}
-          -p:Version=${{ steps.version.outputs.value }}
-          -clp:ForceConsoleColor
-
-      - name: Create MSI
-        id: msi
-        uses: Der-Floh/Der-Floh/.github/actions/create-msi@v1
+      - name: Pack
+        id: pack
+        uses: Der-Floh/Der-Floh/.github/actions/velopack-pack@v1
         with:
-          aip-path: ${{ inputs.aip-path }}
-          version: ${{ steps.version.outputs.value }}
-          output-dir: ${{ inputs.artifacts-path }}
-          advinst-license: ${{ secrets.ADVINST_LICENSE_KEY }}
+          project-path: ${{ inputs.project-path }}
+          runtime: ${{ matrix.runtime }}
+          version: ${{ needs.version.outputs.value }}
+          author: ${{ inputs.author }}
+          package-name: ${{ inputs.package-name }}
+          publish-profile: ${{ inputs.publish-profile }}
+          splash-image: ${{ inputs.splash-image }}
+          output-dir: artifacts
 
-      - name: Verify MSI
-        uses: Der-Floh/Der-Floh/.github/actions/verify-msi@v1
+      - name: Upload installers
+        uses: actions/upload-artifact@v7
         with:
-          installer-path: ${{ steps.msi.outputs.installer-path }}
-          product-name: ${{ inputs.product-name }}
-          version: ${{ steps.version.outputs.value }}
+          name: velopack-${{ matrix.runtime }}
+          path: |
+            ${{ steps.pack.outputs.setup-path }}
+            ${{ steps.pack.outputs.portable-path }}
+          if-no-files-found: error
 
-      - name: Create ZIP
-        uses: Der-Floh/Der-Floh/.github/actions/create-zip@v1
+  verify:
+    name: Verify ${{ matrix.runtime }}
+    needs: [version, pack]
+    runs-on: ${{ endsWith(matrix.runtime, 'arm64') && 'windows-11-arm' || 'windows-latest' }}
+
+    permissions: {}
+
+    strategy:
+      matrix:
+        runtime: ${{ fromJSON(inputs.runtimes) }}
+
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@v8
         with:
-          name: ${{ inputs.package-name }}
-          version: ${{ steps.version.outputs.value }}
-          target: ${{ inputs.target }}
-          source-path: ${{ inputs.publish-path }}
-          output-dir: ${{ inputs.artifacts-path }}
+          name: velopack-${{ matrix.runtime }}
+          path: artifacts
+
+      - name: Verify installer
+        uses: Der-Floh/Der-Floh/.github/actions/verify-velopack@v1
+        with:
+          setup-path: artifacts/${{ inputs.package-name }}-${{ matrix.runtime }}-Setup.exe
+          package-name: ${{ inputs.package-name }}
+          version: ${{ needs.version.outputs.value }}
+
+  release:
+    name: Upload to release
+    needs: verify
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@v8
+        with:
+          pattern: velopack-*
+          path: artifacts
+          merge-multiple: true
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v3
         with:
           fail_on_unmatched_files: true
           files: |
-            ./${{ inputs.artifacts-path }}/*.zip
-            ./${{ inputs.artifacts-path }}/*.msi
+            ./artifacts/*-Setup.exe
+            ./artifacts/*-Portable.zip
 
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
-            ./${{ inputs.artifacts-path }}/*.msi
-            ./${{ inputs.artifacts-path }}/*.zip
+            ./artifacts/*-Setup.exe
+            ./artifacts/*-Portable.zip
 
-      - name: Resolve release asset
-        id: asset
-        uses: Der-Floh/Der-Floh/.github/actions/resolve-release-asset@v1
-        with:
-          repository: ${{ github.repository }}
-          tag: ${{ github.event.release.tag_name }}
-          version: ${{ steps.version.outputs.value }}
-          target: ${{ inputs.target }}
-          file-type: ${{ inputs.file-type }}
-          token: ${{ github.token }}
+  winget:
+    name: WinGet
+    needs: release
+    if: ${{ !github.event.release.prerelease }}
 
-      - name: Verify WinGet manifest
-        uses: Der-Floh/Der-Floh/.github/actions/verify-manifest@v1
-        with:
-          manifest-path: ${{ steps.msi.outputs.manifest-dir }}
-          installer-url: ${{ steps.asset.outputs.url }}
-          installer-sha256: ${{ steps.asset.outputs.sha256 }}
+    permissions:
+      contents: read
 
-      - name: Archive WinGet manifests
-        uses: actions/upload-artifact@v7
-        with:
-          name: ${{ inputs.manifest-artifact }}
-          path: ${{ steps.msi.outputs.manifest-dir }}
-          if-no-files-found: error
-          retention-days: ${{ inputs.retention-days }}
-
-      - name: Resolve WinGet submission mode
-        id: winget
-        if: ${{ !github.event.release.prerelease }}
-        uses: Der-Floh/Der-Floh/.github/actions/resolve-winget-mode@v1
-        with:
-          package-id: ${{ inputs.winget-package-id }}
-          version: ${{ steps.version.outputs.value }}
-          token: ${{ github.token }}
-
-      - name: Create WinGet package
-        if: ${{ steps.winget.outputs.mode == 'create' }}
-        uses: Der-Floh/Der-Floh/.github/actions/winget-publish@v1
-        with:
-          manifest-path: ${{ steps.msi.outputs.manifest-dir }}
-          token: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
-
-      - name: Update WinGet package
-        if: ${{ steps.winget.outputs.mode == 'update' }}
-        uses: Der-Floh/Der-Floh/.github/actions/winget-update@v1
-        with:
-          package-id: ${{ inputs.winget-package-id }}
-          version: ${{ steps.version.outputs.value }}
-          installer-url: ${{ steps.asset.outputs.url }}
-          token: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+    uses: Der-Floh/Der-Floh/.github/workflows/app-publish-winget.yml@v1
+    with:
+      tag: ${{ github.event.release.tag_name }}
+      author: ${{ inputs.author }}
+      package-name: ${{ inputs.package-name }}
+      runtimes: ${{ inputs.runtimes }}
+    secrets:
+      WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}

@@ -1,0 +1,139 @@
+name: Velopack Pack
+description: Publishes a desktop project for one runtime and packs it into a Velopack installer and portable archive
+
+inputs:
+  project-path:
+    description: Desktop project to publish. It must reference the Velopack package
+    required: true
+  runtime:
+    description: Runtime identifier to publish and pack for (e.g. win-x64)
+    required: true
+  version:
+    description: Version number (without v prefix)
+    required: true
+  author:
+    description: Publisher shown in Apps & Features
+    required: false
+    default: ''
+  package-name:
+    description: Package name without spaces. It names the install folder and the created files, so it must never change after the first release
+    required: true
+  publish-profile:
+    description: Publish profile to build with. Leave empty to use the project's own publish settings
+    required: false
+    default: ''
+  splash-image:
+    description: Image shown while the installer runs. Leave empty for a plain progress bar
+    required: false
+    default: ''
+  output-dir:
+    description: Directory the installer and portable archive are written to
+    required: true
+
+outputs:
+  setup-path:
+    description: Absolute path of the created installer
+    value: ${{ steps.pack.outputs.setup-path }}
+  portable-path:
+    description: Absolute path of the created portable archive
+    value: ${{ steps.pack.outputs.portable-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Publish
+      id: publish
+      shell: pwsh
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+        RUNTIME: ${{ inputs.runtime }}
+        VERSION: ${{ inputs.version }}
+        PUBLISH_PROFILE: ${{ inputs.publish-profile }}
+      run: |
+        $publishDir = [IO.Path]::Combine($env:RUNNER_TEMP, 'velopack-publish', $env:RUNTIME)
+        $arguments = @($env:PROJECT_PATH, '-r', $env:RUNTIME, "-p:Version=$env:VERSION", "-p:PublishDir=$publishDir/", '-clp:ForceConsoleColor')
+        if ($env:PUBLISH_PROFILE) { $arguments += "-p:PublishProfile=$env:PUBLISH_PROFILE" }
+        dotnet publish @arguments
+        if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
+        "dir=$publishDir" >> $env:GITHUB_OUTPUT
+
+    - name: Read project metadata
+      id: project
+      shell: pwsh
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+      run: |
+        $json = dotnet msbuild $env:PROJECT_PATH -getProperty:Product -getProperty:AssemblyName -getProperty:ApplicationIcon -getProperty:MSBuildProjectDirectory -getProperty:ProjectAssetsFile
+        if ($LASTEXITCODE -ne 0) { throw "Could not read the properties of $env:PROJECT_PATH." }
+        $properties = ($json -join "`n" | ConvertFrom-Json).Properties
+
+        $assets = Get-Content -LiteralPath $properties.ProjectAssetsFile -Raw | ConvertFrom-Json -AsHashtable
+        $velopack = @($assets.libraries.Keys | Where-Object { $_ -like 'Velopack/*' })
+        if ($velopack.Count -eq 0) { throw "$env:PROJECT_PATH does not reference the Velopack package." }
+
+        $icon = if ($properties.ApplicationIcon) { [IO.Path]::GetFullPath($properties.ApplicationIcon, $properties.MSBuildProjectDirectory) } else { '' }
+
+        "title=$($properties.Product)" >> $env:GITHUB_OUTPUT
+        "main-exe=$($properties.AssemblyName).exe" >> $env:GITHUB_OUTPUT
+        "icon=$icon" >> $env:GITHUB_OUTPUT
+        "velopack-version=$($velopack[0].Split('/')[1])" >> $env:GITHUB_OUTPUT
+
+    - name: Install vpk
+      id: vpk
+      shell: pwsh
+      env:
+        TOOL_VERSION: ${{ steps.project.outputs.velopack-version }}
+      run: |
+        $toolPath = Join-Path $env:RUNNER_TEMP "vpk-$env:TOOL_VERSION"
+        $exe = Join-Path $toolPath 'vpk.exe'
+        if (-not (Test-Path -LiteralPath $exe)) {
+            dotnet tool install vpk --version $env:TOOL_VERSION --tool-path $toolPath
+            if ($LASTEXITCODE -ne 0) { throw "Installing vpk $env:TOOL_VERSION failed with exit code $LASTEXITCODE." }
+        }
+        "path=$exe" >> $env:GITHUB_OUTPUT
+
+    - name: Pack
+      id: pack
+      shell: pwsh
+      env:
+        PACK_TOOL: ${{ steps.vpk.outputs.path }}
+        PACKAGE_NAME: ${{ inputs.package-name }}
+        AUTHOR: ${{ inputs.author }}
+        VERSION: ${{ inputs.version }}
+        RUNTIME: ${{ inputs.runtime }}
+        PUBLISH_DIR: ${{ steps.publish.outputs.dir }}
+        MAIN_EXE: ${{ steps.project.outputs.main-exe }}
+        TITLE: ${{ steps.project.outputs.title }}
+        ICON: ${{ steps.project.outputs.icon }}
+        SPLASH_IMAGE: ${{ inputs.splash-image }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        if (-not $env:PACKAGE_NAME) { throw "A package name is required." }
+        $outputDir = [IO.Path]::GetFullPath($env:OUTPUT_DIR, $env:GITHUB_WORKSPACE)
+
+        $arguments = @(
+            '--legacyConsole', 'pack',
+            '--packId', $env:PACKAGE_NAME,
+            '--packVersion', $env:VERSION,
+            '--packDir', $env:PUBLISH_DIR,
+            '--mainExe', $env:MAIN_EXE,
+            '--packTitle', $env:TITLE,
+            '--runtime', $env:RUNTIME,
+            '--channel', $env:RUNTIME,
+            '--delta', 'None',
+            '--outputDir', $outputDir
+        )
+        if ($env:AUTHOR) { $arguments += '--packAuthors', $env:AUTHOR }
+        if ($env:ICON) { $arguments += '--icon', $env:ICON }
+        if ($env:SPLASH_IMAGE) { $arguments += '--splashImage', [IO.Path]::GetFullPath($env:SPLASH_IMAGE, $env:GITHUB_WORKSPACE) }
+
+        & $env:PACK_TOOL @arguments
+        if ($LASTEXITCODE -ne 0) { throw "vpk pack failed with exit code $LASTEXITCODE." }
+
+        $setup = Join-Path $outputDir "$env:PACKAGE_NAME-$env:RUNTIME-Setup.exe"
+        $portable = Join-Path $outputDir "$env:PACKAGE_NAME-$env:RUNTIME-Portable.zip"
+        foreach ($file in $setup, $portable) {
+            if (-not (Test-Path -LiteralPath $file)) { throw "vpk did not create $file." }
+        }
+        "setup-path=$setup" >> $env:GITHUB_OUTPUT
+        "portable-path=$portable" >> $env:GITHUB_OUTPUT

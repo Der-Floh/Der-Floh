@@ -14,14 +14,34 @@ on:
         default: "10.0.x"
         type: string
       publish-project:
-        description: Project to smoke-publish on Windows. Leave empty to skip that job
+        description: Desktop project to package with Velopack on Windows. Leave empty to skip that job
         required: false
         default: ''
         type: string
       publish-profile:
-        description: Publish profile used for the Windows publish job
+        description: Publish profile used to package the desktop project
         required: false
         default: winx64
+        type: string
+      author:
+        description: Publisher of the desktop project
+        required: false
+        default: ''
+        type: string
+      package-name:
+        description: Package name of the desktop project, without spaces
+        required: false
+        default: ''
+        type: string
+      splash-image:
+        description: Image shown while the installer runs
+        required: false
+        default: ''
+        type: string
+      runtimes:
+        description: JSON array of runtime identifiers the desktop project is packaged for
+        required: false
+        default: '["win-x64", "win-x86", "win-arm64"]'
         type: string
 
 env:
@@ -57,10 +77,15 @@ jobs:
       - name: Build
         run: dotnet build ${{ matrix.project }} -c Release --no-restore -clp:ForceConsoleColor
 
-  publish-desktop:
-    name: Publish desktop
+  package-desktop:
+    name: Package ${{ matrix.runtime }}
     if: ${{ inputs.publish-project != '' }}
     runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: ${{ fromJSON(inputs.runtimes) }}
 
     steps:
       - name: Checkout
@@ -71,8 +96,14 @@ jobs:
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
 
-      - name: Publish
-        run: >
-          dotnet publish ${{ inputs.publish-project }}
-          -p:PublishProfile=${{ inputs.publish-profile }}
-          -clp:ForceConsoleColor
+      - name: Pack
+        uses: Der-Floh/Der-Floh/.github/actions/velopack-pack@v1
+        with:
+          project-path: ${{ inputs.publish-project }}
+          runtime: ${{ matrix.runtime }}
+          version: 0.0.1
+          author: ${{ inputs.author }}
+          package-name: ${{ inputs.package-name }}
+          publish-profile: ${{ inputs.publish-profile }}
+          splash-image: ${{ inputs.splash-image }}
+          output-dir: artifacts

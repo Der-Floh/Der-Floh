@@ -1,10 +1,5 @@
 name: Update WinGet Package
-description: Submits a new version of an existing WinGet package, derived from the released installer
-
-# The setup-wingetcreate reference below is absolute rather than ./.github/actions/...
-# because a relative path inside an action resolves against the calling repository's
-# workspace, which does not contain this repository's actions. Bump the @ref here when
-# cutting a new major tag.
+description: Submits a new version of an existing WinGet package, derived from the released installers
 
 inputs:
   package-id:
@@ -13,8 +8,8 @@ inputs:
   version:
     description: Version number (without v prefix)
     required: true
-  installer-url:
-    description: Download URL of the released installer
+  installer-urls:
+    description: Download URLs of the released installers, one per line. Append |<architecture> to a URL to set its architecture explicitly
     required: true
   token:
     description: GitHub PAT for submitting PR to the WinGet repository
@@ -31,5 +26,14 @@ runs:
       shell: pwsh
       env:
         WINGET_CREATE_GITHUB_TOKEN: ${{ inputs.token }}
+        WINGETCREATE: ${{ steps.wingetcreate.outputs.path }}
+        PACKAGE_ID: ${{ inputs.package-id }}
+        VERSION: ${{ inputs.version }}
+        INSTALLER_URLS: ${{ inputs.installer-urls }}
       run: |
-        & '${{ steps.wingetcreate.outputs.path }}' update '${{ inputs.package-id }}' --urls '${{ inputs.installer-url }}' --version '${{ inputs.version }}' --submit --no-open
+        if (-not $env:WINGET_CREATE_GITHUB_TOKEN) { throw "A GitHub token is required to submit to WinGet." }
+        $urls = @($env:INSTALLER_URLS -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        if ($urls.Count -eq 0) { throw "No installer URLs were given." }
+
+        & $env:WINGETCREATE update $env:PACKAGE_ID --urls @urls --version $env:VERSION --submit --no-open
+        if ($LASTEXITCODE -ne 0) { throw "wingetcreate update failed with exit code $LASTEXITCODE." }

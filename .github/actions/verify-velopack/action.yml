@@ -1,0 +1,56 @@
+name: Verify Velopack Installer
+description: Installs a Velopack setup silently, checks it registers correctly, and uninstalls it
+
+inputs:
+  setup-path:
+    description: Path to the Velopack setup to verify
+    required: true
+  package-name:
+    description: Package name the setup installs under
+    required: true
+  version:
+    description: Version the setup is expected to register (without v prefix)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install, verify and uninstall
+      shell: pwsh
+      env:
+        SETUP_PATH: ${{ inputs.setup-path }}
+        PACKAGE_NAME: ${{ inputs.package-name }}
+        EXPECTED_VERSION: ${{ inputs.version }}
+      run: |
+        $uninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\$env:PACKAGE_NAME"
+        $installDir = Join-Path $env:LOCALAPPDATA $env:PACKAGE_NAME
+        $log = Join-Path $env:RUNNER_TEMP "velopack-setup-$env:PACKAGE_NAME.log"
+
+        $setup = Start-Process -FilePath $env:SETUP_PATH -ArgumentList '--silent', '--log', ('"{0}"' -f $log) -Wait -PassThru
+        if ($setup.ExitCode -ne 0) {
+            if (Test-Path -LiteralPath $log) { Get-Content -LiteralPath $log -Tail 40 | Write-Host }
+            throw "Setup failed with exit code $($setup.ExitCode)."
+        }
+
+        $entry = Get-ItemProperty -Path $uninstallKey -ErrorAction SilentlyContinue
+        if (-not $entry) { throw "$env:PACKAGE_NAME is not registered in Programs and Features after installing." }
+        if ($entry.DisplayVersion -ne $env:EXPECTED_VERSION) {
+            throw "$env:PACKAGE_NAME registered version $($entry.DisplayVersion) but the release is $env:EXPECTED_VERSION."
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $installDir 'current'))) {
+            throw "$env:PACKAGE_NAME was not installed to $installDir."
+        }
+        Write-Host "Installed $($entry.DisplayName) $($entry.DisplayVersion) to $installDir."
+
+        if ($entry.QuietUninstallString -notmatch '^"([^"]+)"\s*(.*)$') {
+            throw "Unexpected quiet uninstall command: $($entry.QuietUninstallString)"
+        }
+        $uninstall = Start-Process -FilePath $Matches[1] -ArgumentList $Matches[2] -Wait -PassThru
+        if ($uninstall.ExitCode -ne 0) { throw "Uninstall failed with exit code $($uninstall.ExitCode)." }
+
+        $deadline = (Get-Date).AddMinutes(1)
+        while ((Test-Path -LiteralPath $uninstallKey) -or (Test-Path -LiteralPath $installDir)) {
+            if ((Get-Date) -gt $deadline) { throw "$env:PACKAGE_NAME is still installed a minute after uninstalling." }
+            Start-Sleep -Seconds 1
+        }
+        Write-Host "$($entry.DisplayName) installs and uninstalls cleanly."

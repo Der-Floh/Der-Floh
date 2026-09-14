@@ -1,10 +1,5 @@
 name: App Publish to WinGet
 
-# Resubmits a release that is already on GitHub to WinGet, for when the release workflow
-# got as far as archiving the manifests but the submission itself did not land. Everything
-# it needs comes from the calling repository: github.repository resolves to the caller, so
-# the run and artifact lookups read that repository's history rather than this one.
-
 on:
   workflow_call:
     inputs:
@@ -12,52 +7,36 @@ on:
         description: Release tag to publish (e.g. v1.2.3)
         required: true
         type: string
-      winget-package-id:
-        description: WinGet package identifier, in Publisher.PackageName form
+      author:
+        description: Publisher of the app, the first part of the WinGet identifier
         required: true
         type: string
-      release-workflow:
-        description: File name of the workflow that archived the manifests
-        required: false
-        default: publish.yml
+      package-name:
+        description: Package name the released installers are named after, the second part of the WinGet identifier
+        required: true
         type: string
-      manifest-artifact:
-        description: Name of the archived WinGet manifest artifact
+      runtimes:
+        description: JSON array of runtime identifiers the release has installers for
         required: false
-        default: winget-manifests
-        type: string
-      manifest-path:
-        description: Directory the manifests are downloaded into
-        required: false
-        default: winget-manifests
-        type: string
-      target:
-        description: Runtime identifier the release was built for
-        required: false
-        default: win-x64
-        type: string
-      file-type:
-        description: Extension of the released installer
-        required: false
-        default: msi
+        default: '["win-x64", "win-x86", "win-arm64"]'
         type: string
     secrets:
       WINGET_CREATE_GITHUB_TOKEN:
         description: GitHub PAT used to submit to the WinGet repository
-        required: true
+        required: false
 
 jobs:
   publish-winget:
+    name: Submit to WinGet
     runs-on: windows-latest
 
     permissions:
       contents: read
-      actions: read
+
+    env:
+      WINGET_PACKAGE_ID: ${{ inputs.author }}.${{ inputs.package-name }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
       - name: Resolve version
         id: version
         uses: Der-Floh/Der-Floh/.github/actions/resolve-version@v1
@@ -69,79 +48,37 @@ jobs:
         id: winget
         uses: Der-Floh/Der-Floh/.github/actions/resolve-winget-mode@v1
         with:
-          package-id: ${{ inputs.winget-package-id }}
+          package-id: ${{ env.WINGET_PACKAGE_ID }}
           version: ${{ steps.version.outputs.value }}
           token: ${{ github.token }}
 
-      - name: Resolve release asset
-        id: asset
-        if: ${{ steps.winget.outputs.mode != 'skip' }}
-        uses: Der-Floh/Der-Floh/.github/actions/resolve-release-asset@v1
-        with:
-          repository: ${{ github.repository }}
-          tag: ${{ inputs.tag }}
-          version: ${{ steps.version.outputs.value }}
-          target: ${{ inputs.target }}
-          file-type: ${{ inputs.file-type }}
-          token: ${{ github.token }}
-
-      - name: Resolve release run
-        id: run
+      - name: Report missing package
         if: ${{ steps.winget.outputs.mode == 'create' }}
         shell: pwsh
+        run: Write-Host "::notice::$env:WINGET_PACKAGE_ID is not in WinGet yet. Submit its first version by hand, for example with komac new; later releases then update it automatically."
+
+      - name: Resolve installer URLs
+        id: installers
+        if: ${{ steps.winget.outputs.mode == 'update' }}
+        shell: pwsh
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
-          RELEASE_WORKFLOW: ${{ inputs.release-workflow }}
-          MANIFEST_ARTIFACT: ${{ inputs.manifest-artifact }}
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          RUNTIMES: ${{ inputs.runtimes }}
         run: |
-          $sha = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:TAG" --jq '.sha'
-          if (-not $sha) { throw "Tag $env:TAG does not resolve to a commit." }
-
-          $runs = @(gh api "repos/$env:GITHUB_REPOSITORY/actions/workflows/$env:RELEASE_WORKFLOW/runs?head_sha=$sha&per_page=20" --jq '.workflow_runs[].id')
-          if ($runs.Count -eq 0) { throw "No $env:RELEASE_WORKFLOW run found for $env:TAG ($sha)." }
-
-          $runId = $null
-          foreach ($candidate in $runs) {
-              $artifacts = @(gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$candidate/artifacts" --jq '.artifacts[] | select(.expired == false) | .name')
-              if ($artifacts -contains $env:MANIFEST_ARTIFACT) { $runId = $candidate; break }
+          $urls = foreach ($runtime in ($env:RUNTIMES | ConvertFrom-Json)) {
+              $architecture = $runtime -replace '^win-', ''
+              "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/download/$env:TAG/$env:PACKAGE_NAME-$runtime-Setup.exe|$architecture"
           }
-          if (-not $runId) {
-              throw "None of the $($runs.Count) $env:RELEASE_WORKFLOW run(s) for $env:TAG ($sha) has an unexpired '$env:MANIFEST_ARTIFACT' artifact. Artifacts expire after 90 days, and runs that failed before the archive step never produced one; re-run the release workflow for that tag."
-          }
-
-          Write-Host "Using $env:RELEASE_WORKFLOW run $runId for $env:TAG."
-          "id=$runId" >> $env:GITHUB_OUTPUT
-
-      - name: Download WinGet manifests
-        if: ${{ steps.winget.outputs.mode == 'create' }}
-        uses: actions/download-artifact@v8
-        with:
-          name: ${{ inputs.manifest-artifact }}
-          run-id: ${{ steps.run.outputs.id }}
-          github-token: ${{ github.token }}
-          path: ${{ inputs.manifest-path }}
-
-      - name: Verify WinGet manifest
-        if: ${{ steps.winget.outputs.mode == 'create' }}
-        uses: Der-Floh/Der-Floh/.github/actions/verify-manifest@v1
-        with:
-          manifest-path: ${{ inputs.manifest-path }}
-          installer-url: ${{ steps.asset.outputs.url }}
-          installer-sha256: ${{ steps.asset.outputs.sha256 }}
-
-      - name: Create WinGet package
-        if: ${{ steps.winget.outputs.mode == 'create' }}
-        uses: Der-Floh/Der-Floh/.github/actions/winget-publish@v1
-        with:
-          manifest-path: ${{ inputs.manifest-path }}
-          token: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+          "urls<<INSTALLER_URLS" >> $env:GITHUB_OUTPUT
+          $urls >> $env:GITHUB_OUTPUT
+          "INSTALLER_URLS" >> $env:GITHUB_OUTPUT
 
       - name: Update WinGet package
         if: ${{ steps.winget.outputs.mode == 'update' }}
         uses: Der-Floh/Der-Floh/.github/actions/winget-update@v1
         with:
-          package-id: ${{ inputs.winget-package-id }}
+          package-id: ${{ env.WINGET_PACKAGE_ID }}
           version: ${{ steps.version.outputs.value }}
-          installer-url: ${{ steps.asset.outputs.url }}
+          installer-urls: ${{ steps.installers.outputs.urls }}
           token: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}

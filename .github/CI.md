@@ -18,22 +18,18 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `pack` | library | Restores, builds and packs deterministically |
 | `verify-package` | library | Validates the `.nupkg` against NuGet packaging rules |
 | `publish-nuget` | library | OIDC login and push of package + symbols |
-| `create-zip` | app | High-compression archive of a publish directory |
-| `create-msi` | app | Builds an MSI with Advanced Installer |
-| `verify-msi` | app | Installs, checks registration, uninstalls |
-| `resolve-release-asset` | app | Finds a released asset and its digest |
-| `verify-manifest` | app | Asserts WinGet manifests match the released installer |
+| `velopack-pack` | app | Publishes one runtime and packs a Velopack installer and portable archive |
+| `verify-velopack` | app | Installs the setup silently, checks registration, uninstalls |
 | `resolve-winget-mode` | app | Decides create / update / skip |
 | `setup-wingetcreate` | app | Downloads and hash-verifies `wingetcreate.exe` |
-| `winget-publish` | app | Submits manifests for a new package |
 | `winget-update` | app | Submits a new version of an existing package |
 
 | Reusable workflow | Purpose |
 | --- | --- |
 | `library-ci.yml` | Build matrix, optional test job, pack a preview, verify it |
-| `app-ci.yml` | Build matrix, optional Windows publish smoke test |
-| `app-publish.yml` | Publish, MSI, archive, attest, release upload and WinGet submission |
-| `app-publish-winget.yml` | Resubmit an existing release to WinGet, from its archived manifests |
+| `app-ci.yml` | Build matrix, optional Velopack packaging of the desktop project |
+| `app-publish.yml` | Velopack installers per runtime, verified, uploaded, attested, then WinGet update |
+| `app-publish-winget.yml` | Submit a release's installers to WinGet as a new version |
 | `app-pages.yml` | Publish a .NET wasm app to GitHub Pages |
 
 ## Consuming: a library
@@ -153,6 +149,8 @@ jobs:
 
 ## Consuming: an app
 
+`.github/workflows/publish.yml`:
+
 ```yaml
 name: Publish Release
 
@@ -174,15 +172,41 @@ jobs:
     uses: Der-Floh/Der-Floh/.github/workflows/app-publish.yml@v1
     with:
       project-path: Cursor_Installer_Creator.Desktop/Cursor_Installer_Creator.Desktop.csproj
-      publish-path: Cursor_Installer_Creator.Desktop/bin/Publish
-      aip-path: .github/CursorInstallerCreator.aip
-      product-name: Cursor Installer Creator
+      author: Der_Floh
       package-name: CursorInstallerCreator
-      winget-package-id: Der_Floh.CursorInstallerCreator
+      splash-image: Cursor_Installer_Creator/Assets/icon-x256.png
     secrets:
-      ADVINST_LICENSE_KEY: ${{ secrets.ADVINST_LICENSE_KEY }}
       WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
 ```
+
+Apps are packaged with [Velopack](https://velopack.io). The desktop project must reference the
+`Velopack` package and call `VelopackApp.Build().Run()` first in `Main`; `vpk pack` refuses to
+pack it otherwise. `vpk` is installed at the Velopack version the project resolves, so updating
+the package updates the tool with it.
+
+For each entry in `runtimes` (by default `win-x64`, `win-x86` and `win-arm64`) the workflow
+publishes with `publish-profile`, packs, installs and uninstalls the setup on a runner of that
+architecture (`windows-11-arm` for `win-arm64`), and then uploads
+`<package-name>-<runtime>-Setup.exe` and `<package-name>-<runtime>-Portable.zip` to the release.
+The installer's title, main executable and icon come from the project's `Product`,
+`AssemblyName` and `ApplicationIcon`; its publisher is `author`.
+
+`package-name` names the install folder (`%LocalAppData%\<package-name>`) and the Apps & Features
+entry, and the WinGet identifier is `<author>.<package-name>`. Changing `package-name` after a
+release installs the app side by side instead of upgrading it. Velopack's update feed is not
+released, so installed apps do not update themselves.
+
+`app-ci.yml` packs every runtime the same way on each push, without releasing anything, when
+`publish-project` and `package-name` are set.
+
+WinGet only receives **new versions** of a package that already exists there. Submit the first
+version by hand, for example with `komac new`; until it is merged, the WinGet job only leaves a
+notice. `WINGET_CREATE_GITHUB_TOKEN` must be a classic PAT with the `public_repo` and `workflow`
+scopes: submitting syncs your fork of `microsoft/winget-pkgs`, which fails without `workflow`
+whenever upstream has changed its workflow files.
+
+App publishing can be a reusable workflow, unlike NuGet publishing below, because the WinGet
+submission authenticates with that PAT rather than an OIDC trust policy.
 
 The secrets have to be set on the **calling** repository. A reusable workflow never sees the
 secrets of the repository that stores it — this repository is public, so if it did, anyone
@@ -218,11 +242,12 @@ git tag -f v1 && git push -f origin v1
 
 Two things to remember when cutting a new major:
 
-- `winget-publish` and `winget-update` reference `setup-wingetcreate` by an **absolute**
-  path pinned to `@v1`. A relative `./` path would resolve against the *calling*
-  repository, which does not contain these actions. Bump those refs with the tag.
-- `library-ci.yml` and `app-ci.yml` reference the actions the same way, for the same
-  reason.
+- `winget-update` references `setup-wingetcreate` by an **absolute** path pinned to
+  `@v1`. A relative `./` path would resolve against the *calling* repository, which does
+  not contain these actions. Bump that ref with the tag.
+- `library-ci.yml`, `app-ci.yml`, `app-publish.yml` and `app-publish-winget.yml` reference
+  the actions the same way, for the same reason, and `app-publish.yml` calls
+  `app-publish-winget.yml` by its `@v1` path.
 
 ### Pinning `publish-nuget`
 
