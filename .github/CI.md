@@ -24,6 +24,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `setup-wingetcreate` | app | Downloads and hash-verifies `wingetcreate.exe` |
 | `winget-update` | app | Submits a new version of an existing package |
 | `extension-pack` | extension | Builds with npm, lints with Mozilla's add-on linter, zips the extension and archives its sources |
+| `nexus-pack` | nexus | Builds and zips a mod, then checks the zip, and optionally a version file inside it, against the release version |
 
 | Reusable workflow | Purpose |
 | --- | --- |
@@ -34,6 +35,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `app-pages.yml` | Publish a .NET wasm app to GitHub Pages |
 | `extension-ci.yml` | Optional project checks, and a linted preview zip of the browser extension |
 | `extension-publish.yml` | Browser extension zip, uploaded, attested, then submitted to the Chrome Web Store and addons.mozilla.org |
+| `nexus-publish.yml` | Mod zip, uploaded, attested, then added to its file on Nexus Mods as a new version |
 
 ## Consuming: a library
 
@@ -329,6 +331,71 @@ The store credentials:
 
 As for apps, the secrets and the permissions block belong to the calling repository.
 
+## Consuming: a mod on Nexus Mods
+
+`.github/workflows/publish.yml`, here for a Vortex extension:
+
+```yaml
+name: Publish Release
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: nexus-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    uses: Der-Floh/Der-Floh/.github/workflows/nexus-publish.yml@v1
+    with:
+      package-name: vs-support
+      version-file: info.json
+      file-id: ${{ vars.NEXUSMODS_FILE_ID }}
+      file-name: Vampire Survivors Support
+      file-description: Adds support for Vampire Survivors to Vortex
+      primary-mod-manager-download: true
+      mod-id: ${{ vars.NEXUSMODS_MOD_ID }}
+      changelog: ${{ github.event.release.html_url }}
+    secrets:
+      NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+```
+
+`nexus-pack` runs `build-command` (by default `npm ci && npm run package`, with Node.js set up),
+which must leave the mod zipped as `<package-name>-<version>.zip` in `package-dir` (by default
+`dist`). The run fails before releasing anything unless that zip exists for the release's
+version. `version-file` names a JSON file inside the zip whose `version` must match as well,
+such as `info.json` for a Vortex extension, which is the version Vortex reads.
+
+The zip is uploaded to the release and attested. Unless the release is a prerelease, it then
+goes to **Nexus Mods** through [Nexus-Mods/upload-action](https://github.com/Nexus-Mods/upload-action)
+as a new version of the file `file-id` names, listed as `<file-name> v<version>`. By default
+the upload also sets the mod's version on Nexus Mods (`update-mod-version`), but doesn't make
+the file the default download for mod managers (`primary-mod-manager-download`), which the
+example turns on. `changelog` adds text to the mod's changelog for the version and needs
+`mod-id`; the example adds a link to the GitHub release, and
+`${{ github.event.release.body }}` would add the release notes themselves. The action has no
+test mode, so every run that gets this far uploads for real.
+
+Nexus Mods only receives **new versions** of a file the mod already has. Upload the first
+version by hand on the mod's *Manage Files* page; the file id and the mod id are then shown by
+the *Advanced* option on the mod's *Files* tab, or in the file's edit menu on *Manage Files*.
+Until `file-id` is set, the Nexus Mods job only leaves a notice, so passing it as a repository
+variable, as above, switches the upload on without editing the workflow; the example passes
+`mod-id` the same way. Once it is set, the
+run fails before releasing anything if `NEXUSMODS_API_KEY` is missing, or if `changelog` is set
+without `mod-id`.
+
+`NEXUSMODS_API_KEY` is a personal API key of the mod's author, from
+<https://www.nexusmods.com/settings/api-keys>. As for apps, the secret and the permissions
+block belong to the calling repository.
+
 ## Why NuGet publishing is not a reusable workflow
 
 nuget.org's trusted publishing matches the repository embedded in the OIDC
@@ -362,8 +429,9 @@ Two things to remember when cutting a new major:
   `@v1`. A relative `./` path would resolve against the *calling* repository, which does
   not contain these actions. Bump that ref with the tag.
 - `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml`,
-  `extension-ci.yml` and `extension-publish.yml` reference the actions the same way, for the
-  same reason, and `app-publish.yml` calls `app-publish-winget.yml` by its `@v1` path.
+  `extension-ci.yml`, `extension-publish.yml` and `nexus-publish.yml` reference the actions
+  the same way, for the same reason, and `app-publish.yml` calls `app-publish-winget.yml` by
+  its `@v1` path.
 
 ### Pinning `publish-nuget`
 

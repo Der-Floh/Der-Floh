@@ -1,0 +1,68 @@
+name: Pack Nexus Mod
+description: Builds and zips a mod, and checks that the zip, and optionally a version file inside it, carry the expected version
+
+inputs:
+  package-name:
+    description: Name the zip starts with (e.g. my-mod gives my-mod-1.2.3.zip)
+    required: true
+  version:
+    description: Version the zip must carry (without v prefix)
+    required: true
+  build-command:
+    description: Command that builds the mod and zips it into package-dir
+    required: false
+    default: npm ci && npm run package
+  package-dir:
+    description: Directory the build command writes the zip to
+    required: false
+    default: dist
+  version-file:
+    description: JSON file inside the zip whose version field must match the version, such as info.json for a Vortex extension. Leave empty to skip the check
+    required: false
+    default: ''
+
+outputs:
+  package-path:
+    description: Path of the zipped mod
+    value: ${{ steps.zip.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build
+      shell: bash
+      run: ${{ inputs.build-command }}
+
+    - name: Check zip
+      id: zip
+      shell: bash
+      env:
+        PACKAGE_PATH: ${{ inputs.package-dir }}/${{ inputs.package-name }}-${{ inputs.version }}.zip
+      run: |
+        if [ ! -f "$PACKAGE_PATH" ]; then
+          echo "::error::The build did not create $PACKAGE_PATH."
+          exit 1
+        fi
+        unzip -l "$PACKAGE_PATH"
+        echo "path=$PACKAGE_PATH" >> "$GITHUB_OUTPUT"
+
+    - name: Check version file
+      if: ${{ inputs.version-file != '' }}
+      shell: bash
+      env:
+        PACKAGE_PATH: ${{ steps.zip.outputs.path }}
+        VERSION_FILE: ${{ inputs.version-file }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        if ! content="$(unzip -p "$PACKAGE_PATH" "$VERSION_FILE")" || [ -z "$content" ]; then
+          echo "::error::$PACKAGE_PATH has no $VERSION_FILE."
+          exit 1
+        fi
+        if ! actual="$(jq -r '.version // empty' <<< "$content")"; then
+          echo "::error::$VERSION_FILE in $PACKAGE_PATH is not valid JSON."
+          exit 1
+        fi
+        if [ "$actual" != "$VERSION" ]; then
+          echo "::error::$VERSION_FILE in $PACKAGE_PATH is version $actual but the release is $VERSION."
+          exit 1
+        fi
