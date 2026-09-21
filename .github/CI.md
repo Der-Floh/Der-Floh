@@ -13,8 +13,8 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 
 | Action | Used by | Purpose |
 | --- | --- | --- |
-| `setup-dotnet` | both | Installs the SDK and restores the NuGet cache |
-| `resolve-version` | both | Validates a release tag and reports the version it carries |
+| `setup-dotnet` | library, app | Installs the SDK and restores the NuGet cache |
+| `resolve-version` | all | Validates a release tag and reports the version it carries |
 | `pack` | library | Restores, builds and packs deterministically |
 | `verify-package` | library | Validates the `.nupkg` against NuGet packaging rules |
 | `publish-nuget` | library | OIDC login and push of package + symbols |
@@ -23,6 +23,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `resolve-winget-mode` | app | Decides create / update / skip |
 | `setup-wingetcreate` | app | Downloads and hash-verifies `wingetcreate.exe` |
 | `winget-update` | app | Submits a new version of an existing package |
+| `extension-pack` | extension | Builds with npm, lints with Mozilla's add-on linter, zips the extension and archives its sources |
 
 | Reusable workflow | Purpose |
 | --- | --- |
@@ -31,6 +32,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `app-publish.yml` | Velopack installers per runtime, verified, uploaded, attested, then WinGet update |
 | `app-publish-winget.yml` | Submit a release's installers to WinGet as a new version |
 | `app-pages.yml` | Publish a .NET wasm app to GitHub Pages |
+| `extension-publish.yml` | Browser extension zip, uploaded, attested, then submitted to the Chrome Web Store and addons.mozilla.org |
 
 ## Consuming: a library
 
@@ -213,6 +215,86 @@ secrets of the repository that stores it — this repository is public, so if it
 could call the workflow and run it with these credentials. The permissions block is also
 required on the caller: a reusable workflow cannot grant itself more than the caller has.
 
+## Consuming: a browser extension
+
+`.github/workflows/publish.yml`:
+
+```yaml
+name: Publish Release
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: extension-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    uses: Der-Floh/Der-Floh/.github/workflows/extension-publish.yml@v1
+    with:
+      extension-dir: extension
+      package-name: little-alchemy-coop
+      chrome-extension-id: ${{ vars.CHROME_EXTENSION_ID }}
+      chrome-publisher-id: ${{ vars.CHROME_PUBLISHER_ID }}
+      firefox-addon-id: ${{ vars.FIREFOX_ADDON_ID }}
+    secrets:
+      CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+      CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+      CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+      AMO_API_KEY: ${{ secrets.AMO_API_KEY }}
+      AMO_API_SECRET: ${{ secrets.AMO_API_SECRET }}
+```
+
+The extension is an npm project at the repository root. `extension-pack` runs `npm ci` and
+`build-command` (by default `npm run build`), which must leave the extension, `manifest.json`
+included, in `extension-dir`. It then checks that the manifest carries the release's version,
+lints the extension with Mozilla's add-on linter, zips it as `<package-name>-<version>.zip` and
+archives the tagged sources next to it. Linting and zipping go through
+[kewisch/action-web-ext](https://github.com/kewisch/action-web-ext), which runs Mozilla's
+`web-ext`. The release tag must be a plain version such as `v1.2.3`: neither store accepts a
+prerelease label in an extension's version.
+
+The zip is uploaded to the release and attested. Unless the release is a prerelease, the same
+zip then goes to both stores:
+
+- the **Chrome Web Store** through
+  [mnao305/chrome-extension-upload](https://github.com/mnao305/chrome-extension-upload), which
+  uses the Chrome Web Store API v2 and submits the new version for review;
+- **addons.mozilla.org** through `web-ext sign` as a listed version, with the source archive
+  attached. AMO requires the sources of bundled or transpiled code and its reviewers rebuild the
+  add-on from them, so the README must say how to build it. The job ends once AMO has
+  validated the upload; the review happens afterwards.
+
+Both stores only receive **new versions** of an extension they already have. Upload the first
+version by hand, for example the zip the first release attached, in the
+[Chrome Web Store Developer Dashboard](https://chrome.google.com/webstore/devconsole) and the
+[AMO Developer Hub](https://addons.mozilla.org/developers/), where each store asks for its listing
+details. Until `chrome-extension-id` or `firefox-addon-id` is set, that store's job only leaves a
+notice, so passing them as repository variables, as above, switches a store on without editing
+the workflow. `firefox-addon-id` is the manifest's `browser_specific_settings.gecko.id`; the run
+fails before releasing anything if the two differ, since AMO would take a changed id for a new
+add-on.
+
+The store credentials:
+
+- `CHROME_CLIENT_ID`, `CHROME_CLIENT_SECRET` and `CHROME_REFRESH_TOKEN` belong to an OAuth client
+  of a Google Cloud project with the Chrome Web Store API enabled.
+  [chrome-webstore-upload-keys](https://github.com/fregante/chrome-webstore-upload-keys) walks
+  through creating one and prints the refresh token. Set the consent screen's publishing status
+  to *In production*: while it is *Testing*, Google expires the refresh token after seven days.
+  `chrome-publisher-id` is shown under *Publisher > Settings* in the Developer Dashboard.
+- `AMO_API_KEY` and `AMO_API_SECRET` are the JWT issuer and JWT secret from
+  <https://addons.mozilla.org/developers/addon/api/key/>.
+
+As for apps, the secrets and the permissions block belong to the calling repository.
+
 ## Why NuGet publishing is not a reusable workflow
 
 nuget.org's trusted publishing matches the repository embedded in the OIDC
@@ -245,9 +327,9 @@ Two things to remember when cutting a new major:
 - `winget-update` references `setup-wingetcreate` by an **absolute** path pinned to
   `@v1`. A relative `./` path would resolve against the *calling* repository, which does
   not contain these actions. Bump that ref with the tag.
-- `library-ci.yml`, `app-ci.yml`, `app-publish.yml` and `app-publish-winget.yml` reference
-  the actions the same way, for the same reason, and `app-publish.yml` calls
-  `app-publish-winget.yml` by its `@v1` path.
+- `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml` and
+  `extension-publish.yml` reference the actions the same way, for the same reason, and
+  `app-publish.yml` calls `app-publish-winget.yml` by its `@v1` path.
 
 ### Pinning `publish-nuget`
 

@@ -1,0 +1,204 @@
+name: Extension Publish
+
+on:
+  workflow_call:
+    inputs:
+      extension-dir:
+        description: Folder the build leaves the extension in, manifest.json included
+        required: true
+        type: string
+      package-name:
+        description: Name of the released zip (e.g. my-extension gives my-extension-1.2.3.zip)
+        required: true
+        type: string
+      build-command:
+        description: Command that builds the extension after npm ci
+        required: false
+        default: npm run build
+        type: string
+      node-version:
+        description: Node.js version selector
+        required: false
+        default: "24"
+        type: string
+      chrome-extension-id:
+        description: Item id of the extension in the Chrome Web Store. Leave empty to skip the Chrome Web Store
+        required: false
+        default: ''
+        type: string
+      chrome-publisher-id:
+        description: Publisher id shown under Publisher > Settings in the Chrome Web Store Developer Dashboard
+        required: false
+        default: ''
+        type: string
+      firefox-addon-id:
+        description: Id of the add-on on addons.mozilla.org, the gecko id in its manifest. Leave empty to skip addons.mozilla.org
+        required: false
+        default: ''
+        type: string
+    secrets:
+      CHROME_CLIENT_ID:
+        description: OAuth client id for the Chrome Web Store API
+        required: false
+      CHROME_CLIENT_SECRET:
+        description: OAuth client secret for the Chrome Web Store API
+        required: false
+      CHROME_REFRESH_TOKEN:
+        description: OAuth refresh token for the Chrome Web Store API
+        required: false
+      AMO_API_KEY:
+        description: JWT issuer of an addons.mozilla.org API key
+        required: false
+      AMO_API_SECRET:
+        description: JWT secret of an addons.mozilla.org API key
+        required: false
+
+jobs:
+  pack:
+    name: Pack
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    outputs:
+      extension-path: ${{ steps.pack.outputs.extension-path }}
+      source-path: ${{ steps.pack.outputs.source-path }}
+
+    steps:
+      - name: Resolve version
+        id: version
+        uses: Der-Floh/Der-Floh/.github/actions/resolve-version@v1
+        with:
+          tag: ${{ github.event.release.tag_name }}
+          allow-prerelease: "false"
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Pack
+        id: pack
+        uses: Der-Floh/Der-Floh/.github/actions/extension-pack@v1
+        with:
+          extension-dir: ${{ inputs.extension-dir }}
+          package-name: ${{ inputs.package-name }}
+          build-command: ${{ inputs.build-command }}
+          version: ${{ steps.version.outputs.value }}
+          output-dir: artifacts
+
+      - name: Check add-on id
+        if: ${{ inputs.firefox-addon-id != '' }}
+        env:
+          MANIFEST: ${{ inputs.extension-dir }}/manifest.json
+          ADDON_ID: ${{ inputs.firefox-addon-id }}
+        run: |
+          actual="$(jq -r '.browser_specific_settings.gecko.id // empty' "$MANIFEST")"
+          if [ "$actual" != "$ADDON_ID" ]; then
+            echo "::error::$MANIFEST has the gecko id '$actual' but firefox-addon-id is '$ADDON_ID'. addons.mozilla.org would take it for another add-on."
+            exit 1
+          fi
+
+      - name: Upload extension
+        uses: actions/upload-artifact@v7
+        with:
+          name: extension
+          path: |
+            ${{ steps.pack.outputs.extension-path }}
+            ${{ steps.pack.outputs.source-path }}
+          if-no-files-found: error
+
+  release:
+    name: Upload to release
+    needs: pack
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download extension
+        uses: actions/download-artifact@v8
+        with:
+          name: extension
+          path: artifacts
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          fail_on_unmatched_files: true
+          files: ${{ needs.pack.outputs.extension-path }}
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ${{ needs.pack.outputs.extension-path }}
+
+  chrome:
+    name: Chrome Web Store
+    needs: [pack, release]
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+
+    permissions: {}
+
+    steps:
+      - name: Report missing item
+        if: ${{ inputs.chrome-extension-id == '' }}
+        run: echo "::notice::chrome-extension-id is not set, so nothing went to the Chrome Web Store. Upload the first version by hand in its Developer Dashboard, then set the item id; later releases then update it automatically."
+
+      - name: Download extension
+        if: ${{ inputs.chrome-extension-id != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: extension
+          path: artifacts
+
+      - name: Upload and publish
+        if: ${{ inputs.chrome-extension-id != '' }}
+        uses: mnao305/chrome-extension-upload@v7.0.0
+        with:
+          file-path: ${{ needs.pack.outputs.extension-path }}
+          extension-id: ${{ inputs.chrome-extension-id }}
+          publisher-id: ${{ inputs.chrome-publisher-id }}
+          client-id: ${{ secrets.CHROME_CLIENT_ID }}
+          client-secret: ${{ secrets.CHROME_CLIENT_SECRET }}
+          refresh-token: ${{ secrets.CHROME_REFRESH_TOKEN }}
+
+  firefox:
+    name: Firefox Add-ons
+    needs: [pack, release]
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+
+    permissions: {}
+
+    steps:
+      - name: Report missing add-on
+        if: ${{ inputs.firefox-addon-id == '' }}
+        run: echo "::notice::firefox-addon-id is not set, so nothing went to addons.mozilla.org. Submit the first version by hand in its Developer Hub, then set the add-on id; later releases then update it automatically."
+
+      - name: Download extension
+        if: ${{ inputs.firefox-addon-id != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: extension
+          path: artifacts
+
+      - name: Submit to addons.mozilla.org
+        if: ${{ inputs.firefox-addon-id != '' }}
+        uses: kewisch/action-web-ext@v2
+        with:
+          cmd: sign
+          source: ${{ needs.pack.outputs.extension-path }}
+          sourceCode: ${{ needs.pack.outputs.source-path }}
+          channel: listed
+          approvalTimeout: 0
+          apiKey: ${{ secrets.AMO_API_KEY }}
+          apiSecret: ${{ secrets.AMO_API_SECRET }}

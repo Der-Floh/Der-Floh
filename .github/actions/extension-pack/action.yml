@@ -1,0 +1,81 @@
+name: Pack Browser Extension
+description: Builds a browser extension with npm, lints it with Mozilla's add-on linter, and zips it next to an archive of its sources
+
+inputs:
+  extension-dir:
+    description: Folder the build leaves the extension in, manifest.json included
+    required: true
+  package-name:
+    description: Name the created files start with (e.g. my-extension gives my-extension-1.2.3.zip)
+    required: true
+  build-command:
+    description: Command that builds the extension after npm ci. Leave empty if it needs no build
+    required: false
+    default: npm run build
+  version:
+    description: Version the manifest must carry (without v prefix). Leave empty to skip the check
+    required: false
+    default: ''
+  output-dir:
+    description: Directory the extension and source archives are written to
+    required: false
+    default: artifacts
+
+outputs:
+  extension-path:
+    description: Path of the zipped extension
+    value: ${{ steps.zip.outputs.target }}
+  source-path:
+    description: Path of the archive of the sources the extension was built from
+    value: ${{ steps.sources.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: npm ci
+
+    - name: Build
+      if: ${{ inputs.build-command != '' }}
+      shell: bash
+      run: ${{ inputs.build-command }}
+
+    - name: Check manifest version
+      if: ${{ inputs.version != '' }}
+      shell: bash
+      env:
+        MANIFEST: ${{ inputs.extension-dir }}/manifest.json
+        VERSION: ${{ inputs.version }}
+      run: |
+        actual="$(jq -r .version "$MANIFEST")"
+        if [ "$actual" != "$VERSION" ]; then
+          echo "::error::$MANIFEST is version $actual but the release is $VERSION."
+          exit 1
+        fi
+
+    - name: Lint
+      uses: kewisch/action-web-ext@v2
+      with:
+        cmd: lint
+        source: ${{ inputs.extension-dir }}
+        channel: listed
+
+    - name: Zip
+      id: zip
+      uses: kewisch/action-web-ext@v2
+      with:
+        cmd: build
+        source: ${{ inputs.extension-dir }}
+        artifacts: ${{ inputs.output-dir }}
+        filename: ${{ inputs.package-name }}-{version}.zip
+
+    - name: Archive sources
+      id: sources
+      shell: bash
+      env:
+        EXTENSION_PATH: ${{ steps.zip.outputs.target }}
+      run: |
+        path="${EXTENSION_PATH%.zip}-source.zip"
+        git archive --format=zip --output="$path" HEAD
+        echo "path=$path" >> "$GITHUB_OUTPUT"
