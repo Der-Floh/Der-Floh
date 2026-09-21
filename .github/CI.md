@@ -32,6 +32,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `app-publish.yml` | Velopack installers per runtime, verified, uploaded, attested, then WinGet update |
 | `app-publish-winget.yml` | Submit a release's installers to WinGet as a new version |
 | `app-pages.yml` | Publish a .NET wasm app to GitHub Pages |
+| `extension-ci.yml` | Optional project checks, and a linted preview zip of the browser extension |
 | `extension-publish.yml` | Browser extension zip, uploaded, attested, then submitted to the Chrome Web Store and addons.mozilla.org |
 
 ## Consuming: a library
@@ -217,6 +218,44 @@ required on the caller: a reusable workflow cannot grant itself more than the ca
 
 ## Consuming: a browser extension
 
+`.github/workflows/ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: Der-Floh/Der-Floh/.github/workflows/extension-ci.yml@v1
+    with:
+      extension-dir: extension
+      package-name: little-alchemy-coop
+      check-command: npm run check
+```
+
+The extension is an npm project at the repository root. `extension-pack` runs `npm ci` and
+`build-command` (by default `npm run build`), which must leave the extension, `manifest.json`
+included, in `extension-dir`. It then lints the extension with Mozilla's add-on linter, zips it
+as `<package-name>-<version>.zip` and archives the sources next to it. Linting and zipping go
+through [kewisch/action-web-ext](https://github.com/kewisch/action-web-ext), which runs Mozilla's
+`web-ext`.
+
+The `Package` job packs every push that way and keeps the zip as an artifact for
+`retention-days`, so each push leaves a build to try out. `check-command` is optional. It runs
+after `npm ci` in a `Check` job of its own, typically the project's type check, linting and unit
+tests; leave it out and that job is skipped.
+
 `.github/workflows/publish.yml`:
 
 ```yaml
@@ -252,14 +291,9 @@ jobs:
       AMO_API_SECRET: ${{ secrets.AMO_API_SECRET }}
 ```
 
-The extension is an npm project at the repository root. `extension-pack` runs `npm ci` and
-`build-command` (by default `npm run build`), which must leave the extension, `manifest.json`
-included, in `extension-dir`. It then checks that the manifest carries the release's version,
-lints the extension with Mozilla's add-on linter, zips it as `<package-name>-<version>.zip` and
-archives the tagged sources next to it. Linting and zipping go through
-[kewisch/action-web-ext](https://github.com/kewisch/action-web-ext), which runs Mozilla's
-`web-ext`. The release tag must be a plain version such as `v1.2.3`: neither store accepts a
-prerelease label in an extension's version.
+A release is packed the same way, from the tagged sources, after checking that the manifest
+carries the release's version. The release tag must be a plain version such as `v1.2.3`: neither
+store accepts a prerelease label in an extension's version.
 
 The zip is uploaded to the release and attested. Unless the release is a prerelease, the same
 zip then goes to both stores:
@@ -327,9 +361,9 @@ Two things to remember when cutting a new major:
 - `winget-update` references `setup-wingetcreate` by an **absolute** path pinned to
   `@v1`. A relative `./` path would resolve against the *calling* repository, which does
   not contain these actions. Bump that ref with the tag.
-- `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml` and
-  `extension-publish.yml` reference the actions the same way, for the same reason, and
-  `app-publish.yml` calls `app-publish-winget.yml` by its `@v1` path.
+- `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml`,
+  `extension-ci.yml` and `extension-publish.yml` reference the actions the same way, for the
+  same reason, and `app-publish.yml` calls `app-publish-winget.yml` by its `@v1` path.
 
 ### Pinning `publish-nuget`
 

@@ -1,0 +1,92 @@
+name: Extension CI
+
+on:
+  workflow_call:
+    inputs:
+      extension-dir:
+        description: Folder the build leaves the extension in, manifest.json included
+        required: true
+        type: string
+      package-name:
+        description: Name of the packed preview zip (e.g. my-extension gives my-extension-1.2.3.zip)
+        required: true
+        type: string
+      build-command:
+        description: Command that builds the extension after npm ci
+        required: false
+        default: npm run build
+        type: string
+      check-command:
+        description: Command that runs the project's own checks after npm ci, such as type checking, linting and unit tests. Leave empty to skip the check job
+        required: false
+        default: ''
+        type: string
+      node-version:
+        description: Node.js version selector
+        required: false
+        default: "24"
+        type: string
+      retention-days:
+        description: How long to keep the packed preview
+        required: false
+        default: 14
+        type: number
+
+jobs:
+  check:
+    name: Check
+    if: ${{ inputs.check-command != '' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check
+        run: ${{ inputs.check-command }}
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Pack
+        id: pack
+        uses: Der-Floh/Der-Floh/.github/actions/extension-pack@v1
+        with:
+          extension-dir: ${{ inputs.extension-dir }}
+          package-name: ${{ inputs.package-name }}
+          build-command: ${{ inputs.build-command }}
+          output-dir: artifacts
+
+      - name: Archive extension
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.pack.outputs.extension-path }}
+          archive: false
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}
