@@ -1,0 +1,47 @@
+name: Tool CI
+
+on:
+  workflow_call:
+    inputs:
+      project-path:
+        description: Project of the app to build
+        required: true
+        type: string
+      retention-days:
+        description: How long to keep the built exe
+        required: false
+        default: 14
+        type: number
+
+jobs:
+  build:
+    name: Build
+    runs-on: windows-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve preview version
+        id: version
+        shell: bash
+        run: echo "value=0.0.0-ci.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Pack
+        id: pack
+        uses: Der-Floh/Der-Floh/.github/actions/tool-pack@v1
+        with:
+          project-path: ${{ inputs.project-path }}
+          version: ${{ steps.version.outputs.value }}
+          output-dir: artifacts
+
+      - name: Archive exe
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.pack.outputs.exe-path }}
+          archive: false
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

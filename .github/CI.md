@@ -25,6 +25,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `winget-update` | app | Submits a new version of an existing package |
 | `extension-pack` | extension | Builds with npm, lints with Mozilla's add-on linter, zips the extension and archives its sources |
 | `nexus-pack` | nexus | Builds and zips a mod, then checks the zip, and optionally a version file inside it, against the release version |
+| `tool-pack` | tool | Builds a .NET Framework app with MSBuild and checks that its exe carries the version and needs no other file |
 
 | Reusable workflow | Purpose |
 | --- | --- |
@@ -36,6 +37,8 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `extension-ci.yml` | Optional project checks, and a linted preview zip of the browser extension |
 | `extension-publish.yml` | Browser extension zip, uploaded, attested, then submitted to the Chrome Web Store and addons.mozilla.org |
 | `nexus-publish.yml` | Mod zip, uploaded, attested, then added to its file on Nexus Mods as a new version |
+| `tool-ci.yml` | MSBuild build of a .NET Framework app, kept as a preview exe |
+| `tool-publish.yml` | .NET Framework app built with MSBuild, its exe uploaded and attested |
 
 ## Consuming: a library
 
@@ -396,6 +399,67 @@ without `mod-id`.
 <https://www.nexusmods.com/settings/api-keys>. As for apps, the secret and the permissions
 block belong to the calling repository.
 
+## Consuming: a tool
+
+A tool is a .NET Framework app whose only release is its exe on GitHub, without an installer or a store.
+
+`.github/workflows/ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: Der-Floh/Der-Floh/.github/workflows/tool-ci.yml@v1
+    with:
+      project-path: M918DAB-Formatter/M918DAB-Formatter.csproj
+```
+
+`.github/workflows/publish.yml`:
+
+```yaml
+name: Publish Release
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: tool-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    uses: Der-Floh/Der-Floh/.github/workflows/tool-publish.yml@v1
+    with:
+      project-path: M918DAB-Formatter/M918DAB-Formatter.csproj
+```
+
+`tool-pack` builds the project with the .NET Framework MSBuild of the runner's Visual Studio rather than `dotnet build`, whose MSBuild cannot embed non-string resources, such as a form's icon, in a .NET Framework app and fails with `MSB3822`/`MSB3823`. `windows-latest` has run Visual Studio 2026 since June 2026, so projects on C# 14 build as well.
+
+A release is built from its tag, which must be a version such as `v1.2.3` or `v1.2.3-beta.1`. The version reaches the exe through `-p:Version`, so the project has to generate its assembly info, as SDK-style projects do by default. The run fails before releasing anything if the exe's product version differs from the tag.
+
+The exe is the only file released, so it has to embed every library it uses, for example with [Costura.Fody](https://github.com/Fody/Costura), and the run fails before releasing anything if the build leaves a DLL next to it. The `.exe.config` and the `.pdb` stay behind as well, so the app has to run without them; Costura resolves the embedded libraries by name, which makes the binding redirects in the `.exe.config` unnecessary. The exe keeps its name, so a new version can replace the old file in place.
+
+The exe is uploaded to the release and attested, prereleases included, since there is no store to hold them back from. `tool-ci.yml` builds every push the same way, as version `0.0.0-ci.<run number>`, and keeps the exe as an artifact for `retention-days`, so each push leaves a build to try out. As for apps, the permissions block belongs to the calling repository.
+
 ## Why NuGet publishing is not a reusable workflow
 
 nuget.org's trusted publishing matches the repository embedded in the OIDC
@@ -428,10 +492,7 @@ Two things to remember when cutting a new major:
 - `winget-update` references `setup-wingetcreate` by an **absolute** path pinned to
   `@v1`. A relative `./` path would resolve against the *calling* repository, which does
   not contain these actions. Bump that ref with the tag.
-- `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml`,
-  `extension-ci.yml`, `extension-publish.yml` and `nexus-publish.yml` reference the actions
-  the same way, for the same reason, and `app-publish.yml` calls `app-publish-winget.yml` by
-  its `@v1` path.
+- `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml`, `extension-ci.yml`, `extension-publish.yml`, `nexus-publish.yml`, `tool-ci.yml` and `tool-publish.yml` reference the actions the same way, for the same reason, and `app-publish.yml` calls `app-publish-winget.yml` by its `@v1` path.
 
 ### Pinning `publish-nuget`
 

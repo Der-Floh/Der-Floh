@@ -1,0 +1,70 @@
+name: Tool Publish
+
+on:
+  workflow_call:
+    inputs:
+      project-path:
+        description: Project of the app to build. Its exe is the only file released, so it must embed every library it uses
+        required: true
+        type: string
+
+jobs:
+  pack:
+    name: Pack
+    runs-on: windows-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Resolve version
+        id: version
+        uses: Der-Floh/Der-Floh/.github/actions/resolve-version@v1
+        with:
+          tag: ${{ github.event.release.tag_name }}
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Pack
+        id: pack
+        uses: Der-Floh/Der-Floh/.github/actions/tool-pack@v1
+        with:
+          project-path: ${{ inputs.project-path }}
+          version: ${{ steps.version.outputs.value }}
+          output-dir: artifacts
+
+      - name: Upload exe
+        uses: actions/upload-artifact@v7
+        with:
+          name: tool
+          path: ${{ steps.pack.outputs.exe-path }}
+          if-no-files-found: error
+
+  release:
+    name: Upload to release
+    needs: pack
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download exe
+        uses: actions/download-artifact@v8
+        with:
+          name: tool
+          path: artifacts
+
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v3
+        with:
+          fail_on_unmatched_files: true
+          files: ./artifacts/*.exe
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: ./artifacts/*.exe
