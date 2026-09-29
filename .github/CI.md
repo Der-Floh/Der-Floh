@@ -26,6 +26,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `extension-pack` | extension | Builds with npm, lints with Mozilla's add-on linter, zips the extension and archives its sources |
 | `nexus-pack` | nexus | Builds and zips a mod, then checks the zip, and optionally a version file inside it, against the release version |
 | `tool-pack` | tool | Builds a .NET Framework app with MSBuild and checks that its exe carries the version and needs no other file |
+| `dependabot-merge` | dependabot | Merges a Dependabot minor or patch update, and leaves any other update for a review |
 
 | Reusable workflow | Purpose |
 | --- | --- |
@@ -39,6 +40,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `nexus-publish.yml` | Mod zip, uploaded, attested, then added to its file on Nexus Mods as a new version |
 | `tool-ci.yml` | MSBuild build of a .NET Framework app, kept as a preview exe |
 | `tool-publish.yml` | .NET Framework app built with MSBuild, its exe uploaded and attested |
+| `dependabot-automerge.yml` | Squash-merge a Dependabot minor or patch update once the other jobs of the calling workflow passed |
 
 ## Consuming: a library
 
@@ -460,6 +462,25 @@ The exe is the only file released, so it has to embed every library it uses, for
 
 The exe is uploaded to the release and attested, prereleases included, since there is no store to hold them back from. `tool-ci.yml` builds every push the same way, as version `0.0.0-ci.<run number>`, and keeps the exe as an artifact for `retention-days`, so each push leaves a build to try out. As for apps, the permissions block belongs to the calling repository.
 
+## Consuming: Dependabot auto-merge
+
+`dependabot-automerge.yml` merges a Dependabot pull request once the repository's own checks passed. Add it to the repository's CI after every other job, here for an app:
+
+```yaml
+  automerge:
+    needs: ci
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: Der-Floh/Der-Floh/.github/workflows/dependabot-automerge.yml@v1
+```
+
+Nothing is merged unless every job in `needs` succeeded. The merge only happens on `pull_request` runs that Dependabot started for its own pull request; on every other run the job is skipped, and a pull request that someone else pushed commits to is left for a review. Dependabot's runs get a read-only token, and the `permissions` of the calling job are what let this one merge. The repository has to allow squash merging.
+
+`dependabot-merge` only merges minor and patch updates, judged by the update type [dependabot/fetch-metadata](https://github.com/dependabot/fetch-metadata) reports; for a group it is the largest change in the group. Major updates, and updates whose type is unknown, stay open with a notice, since a green CI does not prove that nothing the tests miss broke. When several pull requests finish together, GitHub refuses a merge while it still settles the base branch another one just changed, so the merge is tried up to five times, ten seconds apart. A pull request that conflicts after all is rebased by Dependabot, which runs the checks and this job again.
+
+Dependabot itself is set up in the repository's `.github/dependabot.yml`. For NuGet, `directory` or `directories` must point at the folders that directly hold the solution or project files: Dependabot does not search subfolders for them.
+
 ## Why NuGet publishing is not a reusable workflow
 
 nuget.org's trusted publishing matches the repository embedded in the OIDC
@@ -492,7 +513,7 @@ Two things to remember when cutting a new major:
 - `winget-update` references `setup-wingetcreate` by an **absolute** path pinned to
   `@v1`. A relative `./` path would resolve against the *calling* repository, which does
   not contain these actions. Bump that ref with the tag.
-- `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml`, `extension-ci.yml`, `extension-publish.yml`, `nexus-publish.yml`, `tool-ci.yml` and `tool-publish.yml` reference the actions the same way, for the same reason, and `app-publish.yml` calls `app-publish-winget.yml` by its `@v1` path.
+- `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml`, `extension-ci.yml`, `extension-publish.yml`, `nexus-publish.yml`, `tool-ci.yml`, `tool-publish.yml` and `dependabot-automerge.yml` reference the actions the same way, for the same reason, and `app-publish.yml` calls `app-publish-winget.yml` by its `@v1` path.
 
 ### Pinning `publish-nuget`
 

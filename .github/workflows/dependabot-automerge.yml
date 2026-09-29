@@ -1,0 +1,18 @@
+name: Dependabot Auto-merge
+
+on:
+  workflow_call:
+
+jobs:
+  merge:
+    name: Merge
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Merge Dependabot pull request
+        uses: Der-Floh/Der-Floh/.github/actions/dependabot-merge@v1
