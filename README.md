@@ -18,18 +18,60 @@
 
 <br><br>
 
-<a href="https://github.com/Der-Floh/Cursor-Installer-Creator"><picture><source media="(prefers-color-scheme: dark)" srcset="https://socialify.git.ci/Der-Floh/Cursor-Installer-Creator/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FCursor-Installer-Creator%2Frefs%2Fheads%2Fmain%2FCursor_Installer_Creator%2FAssets%2Ficon.svg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Dark"><img width="410" src="https://socialify.git.ci/Der-Floh/Cursor-Installer-Creator/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FCursor-Installer-Creator%2Frefs%2Fheads%2Fmain%2FAssets%2Ficon.svg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Light" alt="Cursor Installer Creator"></picture></a>
-<a href="https://github.com/Der-Floh/Video-To-Ascii"><picture><source media="(prefers-color-scheme: dark)" srcset="https://socialify.git.ci/Der-Floh/Video-To-Ascii/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FVideo-To-Ascii%2Frefs%2Fheads%2Fmain%2FVideoToAscii%2FResources%2Ficon.png&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Dark"><img width="410" src="https://socialify.git.ci/Der-Floh/Video-To-Ascii/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FVideo-To-Ascii%2Frefs%2Fheads%2Fmain%2FVideoToAscii%2FResources%2Ficon.png&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Light" alt="Video To Ascii"></picture></a>
+<p align="center">
+  <a href="https://github.com/Der-Floh/Cursor-Installer-Creator">
+    <img
+      src="https://socialify.git.ci/Der-Floh/Cursor-Installer-Creator/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FCursor-Installer-Creator%2Frefs%2Fheads%2Fmain%2FCursor_Installer_Creator%2FAssets%2Ficon.svg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Auto"
+      width="49%"
+      alt="Cursor Installer Creator"
+    />
+  </a>
+  <a href="https://github.com/Der-Floh/Video-To-Ascii">
+    <img
+      src="https://socialify.git.ci/Der-Floh/Video-To-Ascii/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FVideo-To-Ascii%2Frefs%2Fheads%2Fmain%2FVideoToAscii%2FResources%2Ficon.png&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Auto"
+      width="49%"
+      alt="Video To Ascii"
+    />
+  </a>
+</p>
 
 <br>
 
-<a href="https://github.com/Der-Floh/Flappy-Bird-Windows"><picture><source media="(prefers-color-scheme: dark)" srcset="https://socialify.git.ci/Der-Floh/Flappy-Bird-Windows/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FFlappy-Bird-Windows%2Frefs%2Fheads%2Fmaster%2FFlappy_Bird_Windows%2FResources%2Fyellowbird_icon.png&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Dark"><img width="410" src="https://socialify.git.ci/Der-Floh/Flappy-Bird-Windows/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FFlappy-Bird-Windows%2Frefs%2Fheads%2Fmaster%2FFlappy_Bird_Windows%2FResources%2Fyellowbird_icon.png&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Light" alt="Flappy Bird Windows"></picture></a>
-<a href="https://github.com/CwistSilver/Ico.Reader"><picture><source media="(prefers-color-scheme: dark)" srcset="https://socialify.git.ci/CwistSilver/Ico.Reader/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FCwistSilver%2FIco.Reader%2Frefs%2Fheads%2Fmain%2FAssets%2Ficon.svg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Dark"><img width="410" src="https://socialify.git.ci/CwistSilver/Ico.Reader/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FCwistSilver%2FIco.Reader%2Frefs%2Fheads%2Fmain%2FAssets%2Ficon.svg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Light" alt="Ico.Reader"></picture></a>
+<p align="center">
+  <a href="https://github.com/Der-Floh/Flappy-Bird-Windows">
+    <img
+      src="https://socialify.git.ci/Der-Floh/Flappy-Bird-Windows/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FFlappy-Bird-Windows%2Frefs%2Fheads%2Fmaster%2FFlappy_Bird_Windows%2FResources%2Fyellowbird_icon.png&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Auto"
+      width="49%"
+      alt="Flappy Bird Windows"
+    />
+  </a>
+  <a href="https://github.com/CwistSilver/Ico.Reader">
+    <img
+      src="https://socialify.git.ci/CwistSilver/Ico.Reader/image?description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FCwistSilver%2FIco.Reader%2Frefs%2Fheads%2Fmain%2FAssets%2Ficon.svg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Auto"
+      width="49%"
+      alt="Ico.Reader"
+    />
+  </a>
+</p>
 
 <br>
 
-<a href="https://github.com/Der-Floh/coal-llc-mods"><picture><source media="(prefers-color-scheme: dark)" srcset="https://socialify.git.ci/Der-Floh/coal-llc-mods/image?description=1&font=Inter&forks=1&issues=1&logo=https%3A%2F%2Fassets-prd.ignimgs.com%2F2025%2F08%2F12%2Fcoal-llc-button-1755010466544.jpg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Dark"><img width="410" src="https://socialify.git.ci/Der-Floh/coal-llc-mods/image?description=1&font=Inter&forks=1&issues=1&logo=https%3A%2F%2Fassets-prd.ignimgs.com%2F2025%2F08%2F12%2Fcoal-llc-button-1755010466544.jpg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Light" alt="Coal LLC Mods"></picture></a>
-<a href="https://github.com/Der-Floh/LoadingIndicators.Avalonia"><picture><source media="(prefers-color-scheme: dark)" srcset="https://socialify.git.ci/Der-Floh/LoadingIndicators.Avalonia/image?custom_language=C%23&description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FLoadingIndicators.Avalonia%2Frefs%2Fheads%2Fmaster%2FAssets%2Ficon.svg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Dark"><img width="410" src="https://socialify.git.ci/Der-Floh/LoadingIndicators.Avalonia/image?custom_language=C%23&description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FLoadingIndicators.Avalonia%2Frefs%2Fheads%2Fmaster%2FAssets%2Ficon.svg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Light" alt="LoadingIndicators.Avalonia"></picture></a>
+<p align="center">
+  <a href="https://github.com/Der-Floh/coal-llc-mods">
+    <img
+      src="https://socialify.git.ci/Der-Floh/coal-llc-mods/image?description=1&font=Inter&forks=1&issues=1&logo=https%3A%2F%2Fassets-prd.ignimgs.com%2F2025%2F08%2F12%2Fcoal-llc-button-1755010466544.jpg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Auto"
+      width="49%"
+      alt="Coal LLC Mods"
+    />
+  </a>
+  <a href="https://github.com/Der-Floh/LoadingIndicators.Avalonia">
+    <img
+      src="https://socialify.git.ci/Der-Floh/LoadingIndicators.Avalonia/image?custom_language=C%23&description=1&font=Inter&forks=1&issues=1&language=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2FDer-Floh%2FLoadingIndicators.Avalonia%2Frefs%2Fheads%2Fmaster%2FAssets%2Ficon.svg&name=1&owner=1&pattern=Transparent&pulls=1&stargazers=1&theme=Auto"
+      width="49%"
+      alt="LoadingIndicators.Avalonia"
+    />
+  </a>
+</p>
 
 <br><br>
 
