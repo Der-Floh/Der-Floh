@@ -1,0 +1,29 @@
+name: Setup vpk
+description: Installs the Velopack command-line tool vpk
+
+inputs:
+  version:
+    description: Version of vpk to install. Use the version of the Velopack package the app references
+    required: true
+
+outputs:
+  path:
+    description: Absolute path of the installed vpk.exe
+    value: ${{ steps.install.outputs.path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install vpk
+      id: install
+      shell: pwsh
+      env:
+        TOOL_VERSION: ${{ inputs.version }}
+      run: |
+        $toolPath = Join-Path $env:RUNNER_TEMP "vpk-$env:TOOL_VERSION"
+        $exe = Join-Path $toolPath 'vpk.exe'
+        if (-not (Test-Path -LiteralPath $exe)) {
+            dotnet tool install vpk --version $env:TOOL_VERSION --tool-path $toolPath
+            if ($LASTEXITCODE -ne 0) { throw "Installing vpk $env:TOOL_VERSION failed with exit code $LASTEXITCODE." }
+        }
+        "path=$exe" >> $env:GITHUB_OUTPUT

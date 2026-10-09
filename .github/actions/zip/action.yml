@@ -1,0 +1,76 @@
+name: Zip
+description: Zips the contents of a folder, or a list of files, into one archive, optionally inside a folder of the archive
+
+inputs:
+  path:
+    description: A folder, whose contents are zipped with their subfolders, or files, one per line, which are stored side by side. Relative paths are resolved against the workspace
+    required: true
+  archive:
+    description: Path of the zip archive to create. A relative path is resolved against the workspace
+    required: true
+  folder-name:
+    description: Name of the folder in the archive that holds everything, so that extracting the archive gives that folder. Leave empty to store everything at the archive's root
+    required: false
+    default: ''
+
+outputs:
+  archive-path:
+    description: Absolute path of the created archive
+    value: ${{ steps.zip.outputs.archive-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Zip
+      id: zip
+      shell: pwsh
+      env:
+        SOURCE: ${{ inputs.path }}
+        ARCHIVE: ${{ inputs.archive }}
+        FOLDER_NAME: ${{ inputs.folder-name }}
+      run: |
+        $sources = @($env:SOURCE -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { [IO.Path]::GetFullPath($_, $env:GITHUB_WORKSPACE) })
+        if ($sources.Count -eq 0) { throw 'No folder or files to zip were given.' }
+        $archive = [IO.Path]::GetFullPath($env:ARCHIVE, $env:GITHUB_WORKSPACE)
+        if (Test-Path -LiteralPath $archive) { throw "$archive already exists." }
+        foreach ($source in $sources) {
+            if (-not (Test-Path -LiteralPath $source)) { throw "$source does not exist." }
+        }
+
+        $folderName = $env:FOLDER_NAME
+        $invalidNameChars = [IO.Path]::GetInvalidFileNameChars() + [char[]]'\/'
+        if ($folderName -and ($folderName.IndexOfAny($invalidNameChars) -ge 0 -or $folderName -ne $folderName.Trim() -or $folderName.EndsWith('.'))) {
+            throw "'$folderName' is not a valid folder name."
+        }
+        $prefix = if ($folderName) { "$folderName/" } else { '' }
+
+        # Archive entry name -> file to store, or an empty string for an empty folder.
+        $entries = [ordered]@{}
+        if ($sources.Count -eq 1 -and (Test-Path -LiteralPath $sources[0] -PathType Container)) {
+            $root = $sources[0]
+            foreach ($item in Get-ChildItem -LiteralPath $root -Recurse -Force) {
+                $name = $prefix + [IO.Path]::GetRelativePath($root, $item.FullName).Replace('\', '/')
+                if (-not $item.PSIsContainer) { $entries[$name] = $item.FullName }
+                elseif (-not (Get-ChildItem -LiteralPath $item.FullName -Force | Select-Object -First 1)) { $entries["$name/"] = '' }
+            }
+            if ($entries.Count -eq 0) { throw "$root is empty." }
+        } else {
+            foreach ($source in $sources) {
+                if (Test-Path -LiteralPath $source -PathType Container) { throw "$source is a folder. Zip a single folder, or files only." }
+                $name = $prefix + [IO.Path]::GetFileName($source)
+                if ($entries.Contains($name)) { throw "$($entries[$name]) and $source would both be stored as $name." }
+                $entries[$name] = $source
+            }
+        }
+
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $archive) | Out-Null
+        $zip = [IO.Compression.ZipFile]::Open($archive, [IO.Compression.ZipArchiveMode]::Create)
+        try {
+            foreach ($entry in $entries.GetEnumerator()) {
+                if ($entry.Value) { [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $entry.Value, $entry.Key, [IO.Compression.CompressionLevel]::Optimal) | Out-Null }
+                else { $zip.CreateEntry($entry.Key) | Out-Null }
+            }
+        } finally {
+            $zip.Dispose()
+        }
+        "archive-path=$archive" >> $env:GITHUB_OUTPUT

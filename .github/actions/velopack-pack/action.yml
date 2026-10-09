@@ -1,12 +1,15 @@
 name: Velopack Pack
-description: Publishes a desktop project for one runtime and packs it into a Velopack installer and portable archive
+description: Packs a published desktop project into a Velopack installer and, unless turned off, a portable archive
 
 inputs:
   project-path:
-    description: Desktop project to publish. It must reference the Velopack package
+    description: Desktop project the folder was published from. It must reference the Velopack package, whose version selects the version of vpk
+    required: true
+  publish-dir:
+    description: Folder the project was published into for runtime
     required: true
   runtime:
-    description: Runtime identifier to publish and pack for (e.g. win-x64)
+    description: Runtime identifier the project was published for (e.g. win-x64)
     required: true
   version:
     description: Version number (without v prefix)
@@ -18,14 +21,18 @@ inputs:
   package-name:
     description: Package name without spaces. It names the install folder and the created files, so it must never change after the first release
     required: true
-  publish-profile:
-    description: Publish profile to build with. Leave empty to use the project's own publish settings
-    required: false
-    default: ''
   splash-image:
     description: Image shown while the installer runs. Leave empty for a plain progress bar
     required: false
     default: ''
+  shortcuts:
+    description: Comma separated places the installer creates shortcuts to the app in (Desktop, StartMenuRoot, StartMenu, Startup), or None. Leave empty for Velopack's default, Desktop and StartMenuRoot
+    required: false
+    default: ''
+  portable:
+    description: Whether to also create Velopack's portable archive, which starts the app through a launcher of its own. Set false to zip the published files instead
+    required: false
+    default: 'true'
   output-dir:
     description: Directory the installer and portable archive are written to
     required: true
@@ -35,28 +42,12 @@ outputs:
     description: Absolute path of the created installer
     value: ${{ steps.pack.outputs.setup-path }}
   portable-path:
-    description: Absolute path of the created portable archive
+    description: Absolute path of the created portable archive, empty when portable is false
     value: ${{ steps.pack.outputs.portable-path }}
 
 runs:
   using: composite
   steps:
-    - name: Publish
-      id: publish
-      shell: pwsh
-      env:
-        PROJECT_PATH: ${{ inputs.project-path }}
-        RUNTIME: ${{ inputs.runtime }}
-        VERSION: ${{ inputs.version }}
-        PUBLISH_PROFILE: ${{ inputs.publish-profile }}
-      run: |
-        $publishDir = [IO.Path]::Combine($env:RUNNER_TEMP, 'velopack-publish', $env:RUNTIME)
-        $arguments = @($env:PROJECT_PATH, '-r', $env:RUNTIME, "-p:Version=$env:VERSION", "-p:PublishDir=$publishDir/", '-clp:ForceConsoleColor')
-        if ($env:PUBLISH_PROFILE) { $arguments += "-p:PublishProfile=$env:PUBLISH_PROFILE" }
-        dotnet publish @arguments
-        if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
-        "dir=$publishDir" >> $env:GITHUB_OUTPUT
-
     - name: Read project metadata
       id: project
       shell: pwsh
@@ -78,19 +69,11 @@ runs:
         "icon=$icon" >> $env:GITHUB_OUTPUT
         "velopack-version=$($velopack[0].Split('/')[1])" >> $env:GITHUB_OUTPUT
 
-    - name: Install vpk
+    - name: Setup vpk
       id: vpk
-      shell: pwsh
-      env:
-        TOOL_VERSION: ${{ steps.project.outputs.velopack-version }}
-      run: |
-        $toolPath = Join-Path $env:RUNNER_TEMP "vpk-$env:TOOL_VERSION"
-        $exe = Join-Path $toolPath 'vpk.exe'
-        if (-not (Test-Path -LiteralPath $exe)) {
-            dotnet tool install vpk --version $env:TOOL_VERSION --tool-path $toolPath
-            if ($LASTEXITCODE -ne 0) { throw "Installing vpk $env:TOOL_VERSION failed with exit code $LASTEXITCODE." }
-        }
-        "path=$exe" >> $env:GITHUB_OUTPUT
+      uses: Der-Floh/Der-Floh/.github/actions/setup-vpk@v1
+      with:
+        version: ${{ steps.project.outputs.velopack-version }}
 
     - name: Pack
       id: pack
@@ -101,21 +84,24 @@ runs:
         AUTHOR: ${{ inputs.author }}
         VERSION: ${{ inputs.version }}
         RUNTIME: ${{ inputs.runtime }}
-        PUBLISH_DIR: ${{ steps.publish.outputs.dir }}
+        PUBLISH_DIR: ${{ inputs.publish-dir }}
         MAIN_EXE: ${{ steps.project.outputs.main-exe }}
         TITLE: ${{ steps.project.outputs.title }}
         ICON: ${{ steps.project.outputs.icon }}
         SPLASH_IMAGE: ${{ inputs.splash-image }}
+        SHORTCUTS: ${{ inputs.shortcuts }}
+        PORTABLE: ${{ inputs.portable }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
       run: |
         if (-not $env:PACKAGE_NAME) { throw "A package name is required." }
+        if ($env:PORTABLE -notin 'true', 'false') { throw "portable must be true or false, not '$env:PORTABLE'." }
         $outputDir = [IO.Path]::GetFullPath($env:OUTPUT_DIR, $env:GITHUB_WORKSPACE)
 
         $arguments = @(
             '--legacyConsole', 'pack',
             '--packId', $env:PACKAGE_NAME,
             '--packVersion', $env:VERSION,
-            '--packDir', $env:PUBLISH_DIR,
+            '--packDir', [IO.Path]::GetFullPath($env:PUBLISH_DIR, $env:GITHUB_WORKSPACE),
             '--mainExe', $env:MAIN_EXE,
             '--packTitle', $env:TITLE,
             '--runtime', $env:RUNTIME,
@@ -126,13 +112,15 @@ runs:
         if ($env:AUTHOR) { $arguments += '--packAuthors', $env:AUTHOR }
         if ($env:ICON) { $arguments += '--icon', $env:ICON }
         if ($env:SPLASH_IMAGE) { $arguments += '--splashImage', [IO.Path]::GetFullPath($env:SPLASH_IMAGE, $env:GITHUB_WORKSPACE) }
+        if ($env:SHORTCUTS) { $arguments += '--shortcuts', $env:SHORTCUTS }
+        if ($env:PORTABLE -eq 'false') { $arguments += '--noPortable' }
 
         & $env:PACK_TOOL @arguments
         if ($LASTEXITCODE -ne 0) { throw "vpk pack failed with exit code $LASTEXITCODE." }
 
         $setup = Join-Path $outputDir "$env:PACKAGE_NAME-$env:RUNTIME-Setup.exe"
-        $portable = Join-Path $outputDir "$env:PACKAGE_NAME-$env:RUNTIME-Portable.zip"
-        foreach ($file in $setup, $portable) {
+        $portable = if ($env:PORTABLE -eq 'true') { Join-Path $outputDir "$env:PACKAGE_NAME-$env:RUNTIME-Portable.zip" } else { '' }
+        foreach ($file in @($setup, $portable) | Where-Object { $_ }) {
             if (-not (Test-Path -LiteralPath $file)) { throw "vpk did not create $file." }
         }
         "setup-path=$setup" >> $env:GITHUB_OUTPUT

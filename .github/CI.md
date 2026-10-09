@@ -14,11 +14,15 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | Action | Used by | Purpose |
 | --- | --- | --- |
 | `setup-dotnet` | library, app | Installs the SDK and restores the NuGet cache |
+| `dotnet-test` | library, app | Builds and runs a test project in Release and keeps its results |
 | `resolve-version` | all | Validates a release tag and reports the version it carries |
 | `pack` | library | Restores, builds and packs deterministically |
 | `verify-package` | library | Validates the `.nupkg` against NuGet packaging rules |
 | `publish-nuget` | library | OIDC login and push of package + symbols |
-| `velopack-pack` | app | Publishes one runtime and packs a Velopack installer and portable archive |
+| `dotnet-publish` | app | Publishes a project for one runtime into a folder |
+| `setup-vpk` | app | Installs Velopack's `vpk` at a given version |
+| `velopack-pack` | app | Packs a published folder into a Velopack installer and, unless turned off, a portable archive |
+| `zip` | app | Zips the contents of a folder, or a list of files, into one archive, optionally inside a folder of the archive |
 | `verify-velopack` | app | Installs the setup silently, checks registration, uninstalls |
 | `resolve-winget-mode` | app | Decides create / update / skip |
 | `setup-wingetcreate` | app | Downloads and hash-verifies `wingetcreate.exe` |
@@ -31,7 +35,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | Reusable workflow | Purpose |
 | --- | --- |
 | `library-ci.yml` | Build matrix, optional test job, pack a preview, verify it |
-| `app-ci.yml` | Build matrix, optional Velopack packaging of the desktop project |
+| `app-ci.yml` | Build matrix, optional test job, optional Velopack packaging of the desktop project |
 | `app-publish.yml` | Velopack installers per runtime, verified, uploaded, attested, then WinGet update |
 | `app-publish-winget.yml` | Submit a release's installers to WinGet as a new version |
 | `app-pages.yml` | Publish a .NET wasm app to GitHub Pages |
@@ -208,6 +212,19 @@ released, so installed apps do not update themselves.
 
 `app-ci.yml` packs every runtime the same way on each push, without releasing anything, when
 `publish-project` and `package-name` are set.
+
+`test-project` adds a `Test` job to `app-ci.yml`, which runs the tests the same way as for a library, so the repository needs the same `global.json` and `Microsoft.Testing.Extensions.TrxReport` reference.
+
+`shortcuts` sets where the installer creates shortcuts to the app: a comma separated list of `Desktop`, `StartMenuRoot`, `StartMenu` and `Startup`, or `None`. Left empty, Velopack creates them on the desktop and in the Start menu. A command-line app passes `None`, since its shortcut would only open a console window that closes again. Velopack doesn't add the app to `PATH` either, so a command-line app does that itself in its install and uninstall hooks. For a NativeAOT app `vpk` can't inspect `Main` and skips its check for `VelopackApp.Build().Run()`, so nothing catches a missing call.
+
+`plain-portable: true` makes the portable archive a zip of the published files instead of Velopack's portable package, whose launcher runs a command-line app in a window that closes right away. The files sit in a folder named after `package-name`, so extracting the archive gives that folder. The archive keeps its name, `<package-name>-<runtime>-Portable.zip`, and is uploaded and attested together with the setups once they are verified. Since it is the publish folder as it is, the project has to keep files it doesn't need to ship, such as `.pdb` files, out of it.
+
+An app that uses ImageSharp 4 or later only builds in Release with its license key. Pass the repository secret `SIXLABORS_LICENSE_KEY` to `app-ci.yml` and `app-publish.yml`; they hand it to MSBuild as the environment variable `SixLaborsLicenseKey`, which also keeps the `;` inside the key intact. Dependabot's pull requests can't read Actions secrets, so set the key as a Dependabot secret as well, or their CI fails:
+
+```bash
+gh secret set SIXLABORS_LICENSE_KEY --app actions
+gh secret set SIXLABORS_LICENSE_KEY --app dependabot
+```
 
 WinGet only receives **new versions** of a package that already exists there. Submit the first
 version by hand, for example with `komac new`; until it is merged, the WinGet job only leaves a
@@ -510,9 +527,7 @@ git tag -f v1 && git push -f origin v1
 
 Two things to remember when cutting a new major:
 
-- `winget-update` references `setup-wingetcreate` by an **absolute** path pinned to
-  `@v1`. A relative `./` path would resolve against the *calling* repository, which does
-  not contain these actions. Bump that ref with the tag.
+- `winget-update` references `setup-wingetcreate`, and `velopack-pack` references `setup-vpk`, by an **absolute** path pinned to `@v1`. A relative `./` path would resolve against the *calling* repository, which does not contain these actions. Bump those refs with the tag.
 - `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml`, `extension-ci.yml`, `extension-publish.yml`, `nexus-publish.yml`, `tool-ci.yml`, `tool-publish.yml` and `dependabot-automerge.yml` reference the actions the same way, for the same reason, and `app-publish.yml` calls `app-publish-winget.yml` by its `@v1` path.
 
 ### Pinning `publish-nuget`

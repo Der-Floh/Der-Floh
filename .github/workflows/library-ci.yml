@@ -87,25 +87,11 @@ jobs:
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
 
-      - name: Restore
-        run: dotnet restore ${{ inputs.test-project }} -clp:ForceConsoleColor
-
-      - name: Build
-        run: dotnet build ${{ inputs.test-project }} -c Release --no-restore -clp:ForceConsoleColor
-
       - name: Test
-        run: >
-          dotnet test --project ${{ inputs.test-project }} -c Release --no-build
-          --report-trx
-          --results-directory ./${{ inputs.artifacts-path }}/test
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v7
+        uses: Der-Floh/Der-Floh/.github/actions/dotnet-test@v1
         with:
-          name: test-results
-          path: ./${{ inputs.artifacts-path }}/test
-          if-no-files-found: warn
+          project-path: ${{ inputs.test-project }}
+          results-dir: ${{ inputs.artifacts-path }}/test
           retention-days: ${{ inputs.retention-days }}
 
   package:

@@ -25,6 +25,16 @@ on:
         required: false
         default: winx64
         type: string
+      shortcuts:
+        description: Comma separated places the installer creates shortcuts to the app in, or None. Leave empty for Velopack's default, Desktop and StartMenuRoot
+        required: false
+        default: ''
+        type: string
+      plain-portable:
+        description: Zip the published files as they are as the portable archive, instead of Velopack's portable package, which starts the app through a launcher that runs a command-line app in a window that closes right away
+        required: false
+        default: false
+        type: boolean
       runtimes:
         description: JSON array of runtime identifiers to release installers for
         required: false
@@ -38,6 +48,9 @@ on:
     secrets:
       WINGET_CREATE_GITHUB_TOKEN:
         description: GitHub PAT used to submit to the WinGet repository
+        required: false
+      SIXLABORS_LICENSE_KEY:
+        description: ImageSharp license key, handed to MSBuild as SixLaborsLicenseKey. Only projects that use ImageSharp 4 or later need it to build in Release
         required: false
 
 env:
@@ -70,6 +83,9 @@ jobs:
     permissions:
       contents: read
 
+    env:
+      SixLaborsLicenseKey: ${{ secrets.SIXLABORS_LICENSE_KEY }}
+
     strategy:
       matrix:
         runtime: ${{ fromJSON(inputs.runtimes) }}
@@ -83,18 +99,38 @@ jobs:
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
 
+      - name: Publish
+        id: publish
+        uses: Der-Floh/Der-Floh/.github/actions/dotnet-publish@v1
+        with:
+          project-path: ${{ inputs.project-path }}
+          runtime: ${{ matrix.runtime }}
+          version: ${{ needs.version.outputs.value }}
+          publish-profile: ${{ inputs.publish-profile }}
+
       - name: Pack
         id: pack
         uses: Der-Floh/Der-Floh/.github/actions/velopack-pack@v1
         with:
           project-path: ${{ inputs.project-path }}
+          publish-dir: ${{ steps.publish.outputs.dir }}
           runtime: ${{ matrix.runtime }}
           version: ${{ needs.version.outputs.value }}
           author: ${{ inputs.author }}
           package-name: ${{ inputs.package-name }}
-          publish-profile: ${{ inputs.publish-profile }}
           splash-image: ${{ inputs.splash-image }}
+          shortcuts: ${{ inputs.shortcuts }}
+          portable: ${{ !inputs.plain-portable }}
           output-dir: artifacts
+
+      - name: Zip portable archive
+        id: zip
+        if: ${{ inputs.plain-portable }}
+        uses: Der-Floh/Der-Floh/.github/actions/zip@v1
+        with:
+          path: ${{ steps.publish.outputs.dir }}
+          archive: artifacts/${{ inputs.package-name }}-${{ matrix.runtime }}-Portable.zip
+          folder-name: ${{ inputs.package-name }}
 
       - name: Upload installers
         uses: actions/upload-artifact@v7
@@ -102,7 +138,7 @@ jobs:
           name: velopack-${{ matrix.runtime }}
           path: |
             ${{ steps.pack.outputs.setup-path }}
-            ${{ steps.pack.outputs.portable-path }}
+            ${{ steps.zip.outputs.archive-path || steps.pack.outputs.portable-path }}
           if-no-files-found: error
 
   verify:

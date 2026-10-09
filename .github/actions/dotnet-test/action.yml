@@ -1,0 +1,46 @@
+name: Test .NET Project
+description: Builds and runs a test project in Release and keeps its results as an artifact
+
+inputs:
+  project-path:
+    description: Test project to run. It must run on Microsoft.Testing.Platform and reference Microsoft.Testing.Extensions.TrxReport
+    required: true
+  results-dir:
+    description: Directory the test results are written to
+    required: false
+    default: artifacts/test
+  retention-days:
+    description: How long to keep the test results
+    required: false
+    default: '14'
+
+runs:
+  using: composite
+  steps:
+    - name: Restore
+      shell: pwsh
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+      run: dotnet restore $env:PROJECT_PATH -clp:ForceConsoleColor
+
+    - name: Build
+      shell: pwsh
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+      run: dotnet build $env:PROJECT_PATH -c Release --no-restore -clp:ForceConsoleColor
+
+    - name: Test
+      shell: pwsh
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+        RESULTS_DIR: ${{ inputs.results-dir }}
+      run: dotnet test --project $env:PROJECT_PATH -c Release --no-build --report-trx --results-directory $env:RESULTS_DIR
+
+    - name: Upload test results
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: test-results
+        path: ${{ inputs.results-dir }}
+        if-no-files-found: warn
+        retention-days: ${{ inputs.retention-days }}

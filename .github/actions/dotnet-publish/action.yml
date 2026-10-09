@@ -1,0 +1,46 @@
+name: Publish .NET Project
+description: Publishes a project for one runtime into a folder
+
+inputs:
+  project-path:
+    description: Project to publish
+    required: true
+  runtime:
+    description: Runtime identifier to publish for (e.g. win-x64)
+    required: true
+  version:
+    description: Version number stamped into the app (without v prefix)
+    required: true
+  publish-profile:
+    description: Publish profile to build with. Leave empty to use the project's own publish settings
+    required: false
+    default: ''
+  output-dir:
+    description: Folder to publish into. Leave empty for a folder of its own in the runner's temp folder
+    required: false
+    default: ''
+
+outputs:
+  dir:
+    description: Absolute path of the folder the project was published into
+    value: ${{ steps.publish.outputs.dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Publish
+      id: publish
+      shell: pwsh
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+        RUNTIME: ${{ inputs.runtime }}
+        VERSION: ${{ inputs.version }}
+        PUBLISH_PROFILE: ${{ inputs.publish-profile }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        $publishDir = if ($env:OUTPUT_DIR) { [IO.Path]::GetFullPath($env:OUTPUT_DIR, $env:GITHUB_WORKSPACE) } else { [IO.Path]::Combine($env:RUNNER_TEMP, 'publish', $env:RUNTIME) }
+        $arguments = @($env:PROJECT_PATH, '-r', $env:RUNTIME, "-p:Version=$env:VERSION", "-p:PublishDir=$publishDir/", '-clp:ForceConsoleColor')
+        if ($env:PUBLISH_PROFILE) { $arguments += "-p:PublishProfile=$env:PUBLISH_PROFILE" }
+        dotnet publish @arguments
+        if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
+        "dir=$publishDir" >> $env:GITHUB_OUTPUT

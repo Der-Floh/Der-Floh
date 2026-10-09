@@ -43,6 +43,30 @@ on:
         required: false
         default: '["win-x64", "win-x86", "win-arm64"]'
         type: string
+      shortcuts:
+        description: Comma separated places the installer creates shortcuts to the desktop project in, or None. Leave empty for Velopack's default, Desktop and StartMenuRoot
+        required: false
+        default: ''
+        type: string
+      plain-portable:
+        description: Zip the published files as they are as the portable archive, instead of Velopack's portable package, which starts the app through a launcher that runs a command-line app in a window that closes right away
+        required: false
+        default: false
+        type: boolean
+      test-project:
+        description: Test project to run. Leave empty to skip the test job
+        required: false
+        default: ''
+        type: string
+      retention-days:
+        description: How long to keep the test results
+        required: false
+        default: 14
+        type: number
+    secrets:
+      SIXLABORS_LICENSE_KEY:
+        description: ImageSharp license key, handed to MSBuild as SixLaborsLicenseKey. Only projects that use ImageSharp 4 or later need it to build in Release
+        required: false
 
 env:
   DOTNET_NOLOGO: "true"
@@ -52,6 +76,9 @@ jobs:
   build:
     name: Build ${{ matrix.name }}
     runs-on: ubuntu-latest
+
+    env:
+      SixLaborsLicenseKey: ${{ secrets.SIXLABORS_LICENSE_KEY }}
 
     strategy:
       fail-fast: false
@@ -77,10 +104,37 @@ jobs:
       - name: Build
         run: dotnet build ${{ matrix.project }} -c Release --no-restore -clp:ForceConsoleColor
 
+  test:
+    name: Test
+    if: ${{ inputs.test-project != '' }}
+    runs-on: windows-latest
+
+    env:
+      SixLaborsLicenseKey: ${{ secrets.SIXLABORS_LICENSE_KEY }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup .NET
+        uses: Der-Floh/Der-Floh/.github/actions/setup-dotnet@v1
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Test
+        uses: Der-Floh/Der-Floh/.github/actions/dotnet-test@v1
+        with:
+          project-path: ${{ inputs.test-project }}
+          retention-days: ${{ inputs.retention-days }}
+
   package-desktop:
     name: Package ${{ matrix.runtime }}
     if: ${{ inputs.publish-project != '' }}
     runs-on: windows-latest
+
+    env:
+      SixLaborsLicenseKey: ${{ secrets.SIXLABORS_LICENSE_KEY }}
+      PREVIEW_VERSION: 0.0.1
 
     strategy:
       fail-fast: false
@@ -96,14 +150,33 @@ jobs:
         with:
           dotnet-version: ${{ inputs.dotnet-version }}
 
+      - name: Publish
+        id: publish
+        uses: Der-Floh/Der-Floh/.github/actions/dotnet-publish@v1
+        with:
+          project-path: ${{ inputs.publish-project }}
+          runtime: ${{ matrix.runtime }}
+          version: ${{ env.PREVIEW_VERSION }}
+          publish-profile: ${{ inputs.publish-profile }}
+
       - name: Pack
         uses: Der-Floh/Der-Floh/.github/actions/velopack-pack@v1
         with:
           project-path: ${{ inputs.publish-project }}
+          publish-dir: ${{ steps.publish.outputs.dir }}
           runtime: ${{ matrix.runtime }}
-          version: 0.0.1
+          version: ${{ env.PREVIEW_VERSION }}
           author: ${{ inputs.author }}
           package-name: ${{ inputs.package-name }}
-          publish-profile: ${{ inputs.publish-profile }}
           splash-image: ${{ inputs.splash-image }}
+          shortcuts: ${{ inputs.shortcuts }}
+          portable: ${{ !inputs.plain-portable }}
           output-dir: artifacts
+
+      - name: Zip portable archive
+        if: ${{ inputs.plain-portable }}
+        uses: Der-Floh/Der-Floh/.github/actions/zip@v1
+        with:
+          path: ${{ steps.publish.outputs.dir }}
+          archive: artifacts/${{ inputs.package-name }}-${{ matrix.runtime }}-Portable.zip
+          folder-name: ${{ inputs.package-name }}
