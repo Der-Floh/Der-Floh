@@ -28,6 +28,12 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `setup-wingetcreate` | app | Downloads and hash-verifies `wingetcreate.exe` |
 | `winget-update` | app | Submits a new version of an existing package |
 | `extension-pack` | extension | Builds with npm, lints with Mozilla's add-on linter, zips the extension and archives its sources |
+| `vsix-pack` | vscode-extension | Installs, optionally checks, builds and tests a VS Code extension, packs it with vsce and checks the VSIX's version and contents |
+| `vscode-test` | vscode-extension, `vsix-pack` | Runs a VS Code extension's tests under a virtual display |
+| `github-release-upload` | vscode-extension | Uploads files to the release that triggered the run and, in a public repository, attests them |
+| `vs-marketplace-publish` | vscode-extension | Publishes a VSIX to the Visual Studio Marketplace through Microsoft Entra ID |
+| `open-vsx-verify` | vscode-extension | Checks the token, the namespace and the dependencies before anything is released |
+| `open-vsx-publish` | vscode-extension | Publishes a VSIX to Open VSX with a token |
 | `nexus-pack` | nexus | Builds and zips a mod, then checks the zip, and optionally a version file inside it, against the release version |
 | `tool-pack` | tool | Builds a .NET Framework app with MSBuild and checks that its exe carries the version and needs no other file |
 | `dependabot-merge` | dependabot | Merges a Dependabot minor or patch update, and leaves any other update for a review |
@@ -41,6 +47,8 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `app-pages.yml` | Publish a .NET wasm app to GitHub Pages |
 | `extension-ci.yml` | Optional project checks, and a linted preview zip of the browser extension |
 | `extension-publish.yml` | Browser extension zip, uploaded, attested, then submitted to the Chrome Web Store and addons.mozilla.org |
+| `vscode-extension-ci.yml` | Optional checks and VS Code tests, and a checked preview VSIX |
+| `vscode-extension-publish.yml` | VSIX built and tested from the release tag, uploaded and, in a public repository, attested, then published to the Visual Studio Marketplace and Open VSX |
 | `nexus-publish.yml` | Mod zip, uploaded, attested, then added to its file on Nexus Mods as a new version |
 | `tool-ci.yml` | MSBuild build of a .NET Framework app, kept as a preview exe |
 | `tool-publish.yml` | .NET Framework app built with MSBuild, its exe uploaded and attested |
@@ -353,6 +361,123 @@ The store credentials:
 
 As for apps, the secrets and the permissions block belong to the calling repository.
 
+## Consuming: a VS Code extension
+
+`.github/workflows/ci.yml`:
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    uses: Der-Floh/Der-Floh/.github/workflows/vscode-extension-ci.yml@v1
+    with:
+      test-command: npm test
+      required-files: |
+        out/extension.js
+```
+
+`.github/workflows/publish.yml`:
+
+```yaml
+name: Publish Release
+
+on:
+  release:
+    types: [published]
+
+concurrency:
+  group: vscode-extension-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    uses: Der-Floh/Der-Floh/.github/workflows/vscode-extension-publish.yml@v1
+    with:
+      test-command: npm test
+      required-files: |
+        out/extension.js
+      vs-marketplace: true
+      open-vsx: true
+    secrets:
+      OPEN_VSX_TOKEN: ${{ secrets.OPEN_VSX_TOKEN }}
+```
+
+Both files repeat the build inputs, since each workflow builds the extension on its own.
+
+The extension is an npm project at the repository root. `vsix-pack` runs `npm ci` and then `vsce package`, which runs the extension's `vscode:prepublish` script, so whatever that script builds needs no input here. The VSIX is written as `artifacts/<name>-<version>.vsix`, and before anything else the action checks that `package-lock.json` carries the same version as `package.json`.
+
+- `check-command` runs after `npm ci`, typically linting and unit tests that `vscode:prepublish` does not already cover.
+- `build-command` runs after `npm ci` for anything else `vscode:prepublish` does not build.
+- `test-command` runs the extension's tests, for example with `@vscode/test-electron`, after the build. It runs under `xvfb-run`, since VS Code needs a display even when it is tested.
+- `required-files` lists paths or glob patterns, relative to the extension root, that must each match a file in the VSIX. The run fails if one is missing, and the log always shows what the VSIX contains.
+- `pack-dependencies` stays `false` for a bundled extension, which vsce then packs with `--no-dependencies`. Set it for an extension that ships its `node_modules`.
+- `artifact-name` names an artifact of an earlier job of the same run, such as helper binaries, that is downloaded into `artifact-path` before anything is built or tested. The extension's job has to need that job, and `.vscodeignore` must not exclude the files. Artifacts do not keep the executable bit, so the extension has to set it on a helper before running it on Linux and macOS.
+
+In CI, the `Check` job runs `check-command` and the `Test` job runs `test-command`; each is skipped when its command is left out. The `Package` job packs every push and keeps the VSIX as an artifact for `retention-days`, so each push leaves a build to try out.
+
+A release is built from its tag, which must be a plain version such as `v1.2.3`: VS Code extensions carry no prerelease labels in their version. `package.json` and `package-lock.json` must both carry that version, so bump them together with `npm version 1.2.3 --no-git-tag-version`; the run fails before releasing anything otherwise.
+
+The `Pack` job runs everything the extension's CI runs, in one job: `check-command`, `build-command`, `test-command`, packing and the content check. The VSIX that passed is uploaded to the release and, in a public repository, attested. Unless the release is a prerelease, the same file then goes to every registry that is switched on:
+
+- `vs-marketplace: true` publishes it to the **Visual Studio Marketplace** as the Entra app registration described below;
+- `open-vsx: true` publishes it to **Open VSX** with the `OPEN_VSX_TOKEN` secret.
+
+Both are off unless set. A prerelease only gets the VSIX on the GitHub release. Unticking *pre-release* afterwards does not publish it, since GitHub reports that as `released` rather than `published`; release a new version instead.
+
+The registries skip a version they already have, so a failed registry job can be retried with **Re-run failed jobs**. Do not use *Re-run all jobs*: it rebuilds the VSIX, which replaces the file on the release while the registries keep the first build. Do not turn on immutable releases either, since the VSIX is attached after the release is published.
+
+The Marketplace job runs in the environment `vs-marketplace`, which GitHub creates in the calling repository on the first run and which the app's federated credential requires; limiting its deployments to tags matching `v*` is optional hardening. Callers pass neither `azure-client-id` nor `azure-tenant-id`, whose defaults name the app all Der-Floh and Florian-Noever extensions share.
+
+`OPEN_VSX_TOKEN` is an access token from *Settings > Access Tokens* at <https://open-vsx.org>. The publisher's namespace has to exist on Open VSX; create it once with `npx ovsx create-namespace <publisher> -p <token>`. Open VSX refuses an extension whose `extensionDependencies` it cannot resolve, and many extensions depend on one that is only on the Visual Studio Marketplace. So when `open-vsx` is on, `open-vsx-verify` fails the run before anything is released unless the namespace and every dependency are on Open VSX, and also if the token is missing; leave `open-vsx` off for such an extension. The Open VSX job runs without the `id-token` permission, since ovsx would otherwise try Open VSX's trusted publishing on its own instead of the token.
+
+As for apps, the secrets and the permissions block belong to the calling repository.
+
+## Setting up Visual Studio Marketplace publishing
+
+Azure DevOps retires global personal access tokens on 2026-12-01, and a Marketplace token has to be one, so publishing with a token such as `VS_MARKETPLACE_TOKEN` stops working then. `vscode-extension-publish.yml` therefore publishes through Microsoft Entra ID: the Marketplace job exchanges its GitHub OIDC token for the identity of an Entra app registration through `azure/login`, and `vsce publish --azure-credential` publishes as that identity. No Marketplace secret is stored anywhere.
+
+The Der-Floh and Florian-Noever extensions share one app registration, *Marketplace publishing* in the [Microsoft Entra admin center](https://entra.microsoft.com), set up in [Florian-Noever/Florian-Noever](https://github.com/Florian-Noever/Florian-Noever/blob/main/.github/CI.md). Its client and tenant ids are the defaults of `azure-client-id` and `azure-tenant-id`. The app publishes as its own identity, not as the Microsoft account that owns the publishers, so publishing for Der-Floh needs two things of its own:
+
+1. A flexible federated credential for Der-Floh, next to the Florian-Noever one under *Certificates & secrets > Federated credentials*: scenario *Other issuer*, issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange` and this claims matching expression:
+
+   ```text
+   claims['sub'] matches 'repo:Der-Floh*:environment:vs-marketplace' and claims['repository_owner_id'] eq '65826571' and claims['job_workflow_ref'] matches 'Der-Floh/Der-Floh/.github/workflows/vscode-extension-publish.yml@*'
+   ```
+
+   One credential can't cover both accounts: the expression language only has `matches`, `eq` and `and`, and `repository_owner_id` only takes `eq`. Without a matching credential `azure/login` fails with AADSTS70021 or AADSTS700213 (no matching federated identity record); a new credential can also fail that way for a few minutes until it has propagated.
+2. Membership of the publisher `der-floh`. The app has to be a member of every publisher it publishes for: add its Azure DevOps profile id `2d606464-bbba-692d-82a1-8a8087448ef0` under *Members* of the publisher at <https://marketplace.visualstudio.com/manage/publishers> with the *Contributor* role. The id belongs to the app, so it is the same for every publisher. Without the membership the Marketplace refuses the app with `The requested operation is not allowed`, and the failed job prints the id in a notice.
+
+The credential accepts the Marketplace job of this workflow in any repository of the account, and nothing else. The owner is matched by its numeric id, which survives renames, and `repo:Der-Floh*` covers both the name-based subject of repositories created before 2026-07-15 and the immutable `repo:Der-Floh@65826571/<repository>@<id>` subject of newer ones. So a new extension needs no setup in Entra or in its repository's settings. Once an extension publishes through the app, its `VS_MARKETPLACE_TOKEN` secret and the token behind it can go.
+
+Flexible federated credentials are still a preview. Should they stop working, give each repository a classic credential instead (scenario *GitHub Actions deploying Azure resources*, entity type *Environment*, environment `vs-marketplace`) and check its subject: the portal proposes the immutable format, which only matches repositories created after 2026-07-15 or opted in to it. `gh api /repos/Der-Floh/<repository>/actions/oidc/customization/sub` shows which format a repository uses.
+
+Marketplace publishing can be a reusable workflow, unlike NuGet publishing below, because a federated credential only checks the claims it names. In a reusable workflow the subject names the calling repository and its environment, while `job_workflow_ref` names the shared workflow:
+
+```text
+sub              = repo:Der-Floh/Vortex-Extension-Helper:environment:vs-marketplace
+job_workflow_ref = Der-Floh/Der-Floh/.github/workflows/vscode-extension-publish.yml@refs/tags/v1
+```
+
+so the Marketplace job can stay in the shared workflow, and the credential even requires it to.
+
 ## Consuming: a mod on Nexus Mods
 
 `.github/workflows/publish.yml`, here for a Vortex extension:
@@ -519,20 +644,30 @@ caller.
 
 ## Versioning
 
-Consumers track a moving major tag:
+Consumers track a moving major tag. Tags are annotated:
 
 ```bash
-git tag -f v1 && git push -f origin v1
+git tag -a vX.Y.Z -m "Short summary of the change"
+git tag -fa v1 -m "Latest v1.x of the shared CI workflows and composite actions" "vX.Y.Z^{commit}"
+git push origin vX.Y.Z && git push -f origin v1
 ```
+
+`^{commit}` points `v1` at the release's commit. Naming the annotated tag `vX.Y.Z` itself would make `v1` a tag of a tag.
 
 Two things to remember when cutting a new major:
 
-- `winget-update` references `setup-wingetcreate`, and `velopack-pack` references `setup-vpk`, by an **absolute** path pinned to `@v1`. A relative `./` path would resolve against the *calling* repository, which does not contain these actions. Bump those refs with the tag.
-- `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml`, `extension-ci.yml`, `extension-publish.yml`, `nexus-publish.yml`, `tool-ci.yml`, `tool-publish.yml` and `dependabot-automerge.yml` reference the actions the same way, for the same reason, and `app-publish.yml` calls `app-publish-winget.yml` by its `@v1` path.
+- `winget-update` references `setup-wingetcreate`, `velopack-pack` references `setup-vpk`, and `vsix-pack` references `vscode-test`, by an **absolute** path pinned to `@v1`. A relative `./` path would resolve against the *calling* repository, which does not contain these actions. Bump those refs with the tag.
+- `library-ci.yml`, `app-ci.yml`, `app-publish.yml`, `app-publish-winget.yml`, `extension-ci.yml`, `extension-publish.yml`, `vscode-extension-ci.yml`, `vscode-extension-publish.yml`, `nexus-publish.yml`, `tool-ci.yml`, `tool-publish.yml` and `dependabot-automerge.yml` reference the actions the same way, for the same reason, and `app-publish.yml` calls `app-publish-winget.yml` by its `@v1` path.
+
+The vsce and ovsx versions are pinned as input defaults, which Dependabot does not see, so bump them by hand and keep the two vsce pins equal:
+
+- `vsce-version` of `vsix-pack`, default `4.0.0`;
+- `vsce-version` of `vs-marketplace-publish`, default `4.0.0`;
+- `ovsx-version` of `open-vsx-publish`, default `1.2.0`.
 
 ### Pinning `publish-nuget`
 
-`publish-nuget` is the one action holding a publishing credential. Anything able to
+`publish-nuget` is the one action holding a nuget.org publishing credential. Anything able to
 push here or retarget `v1` could mint short-lived nuget.org keys for every library
 that references it. Pin that one action to a commit SHA if you would rather not have
 it move implicitly:
@@ -542,3 +677,5 @@ uses: Der-Floh/Der-Floh/.github/actions/publish-nuget@<sha>
 ```
 
 Dependabot updates SHA pins and annotates them with the version.
+
+The Marketplace identity is held the same way: anything able to push here or retarget `v1` decides what runs as the Entra app for every extension that calls `vscode-extension-publish.yml@v1`. Pinning that call to a SHA only freezes the workflow itself, since it uses its actions by `@v1`. The app is shared with Florian-Noever and is a member of both publishers, and the publisher comes from the VSIX, so this repository and Florian-Noever/Florian-Noever can each publish for both publishers.

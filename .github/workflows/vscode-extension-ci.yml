@@ -1,0 +1,153 @@
+name: VS Code Extension CI
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version selector
+        required: false
+        default: "24"
+        type: string
+      artifact-name:
+        description: Artifact of an earlier job of the calling workflow that is downloaded before the extension is built, such as helper binaries another workflow built. Leave empty to skip it
+        required: false
+        default: ''
+        type: string
+      artifact-path:
+        description: Directory, relative to the repository root, the artifact is downloaded into
+        required: false
+        default: .
+        type: string
+      check-command:
+        description: Command that runs the project's own checks after npm ci, such as linting and unit tests. Leave empty to skip the check job
+        required: false
+        default: ''
+        type: string
+      build-command:
+        description: Command that builds what vscode:prepublish does not, run after npm ci. Leave empty if vscode:prepublish builds everything
+        required: false
+        default: ''
+        type: string
+      test-command:
+        description: Command that runs the extension's tests in VS Code after the build, under a virtual display. Leave empty to skip the test job
+        required: false
+        default: ''
+        type: string
+      required-files:
+        description: Paths or glob patterns, one per line and relative to the extension root, that must each match a file in the VSIX. Leave empty to skip the check
+        required: false
+        default: ''
+        type: string
+      pack-dependencies:
+        description: Whether vsce packs the production dependencies from node_modules. Leave false for a bundled extension
+        required: false
+        default: false
+        type: boolean
+      retention-days:
+        description: How long to keep the packed preview
+        required: false
+        default: 14
+        type: number
+
+jobs:
+  check:
+    name: Check
+    if: ${{ inputs.check-command != '' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Check
+        run: ${{ inputs.check-command }}
+
+  test:
+    name: Test
+    if: ${{ inputs.test-command != '' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Download artifact
+        if: ${{ inputs.artifact-name != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifact-path }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        if: ${{ inputs.build-command != '' }}
+        run: ${{ inputs.build-command }}
+
+      - name: Test
+        uses: Der-Floh/Der-Floh/.github/actions/vscode-test@v1
+        with:
+          command: ${{ inputs.test-command }}
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Download artifact
+        if: ${{ inputs.artifact-name != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifact-path }}
+
+      - name: Pack
+        id: pack
+        uses: Der-Floh/Der-Floh/.github/actions/vsix-pack@v1
+        with:
+          build-command: ${{ inputs.build-command }}
+          required-files: ${{ inputs.required-files }}
+          pack-dependencies: ${{ inputs.pack-dependencies }}
+          output-dir: artifacts
+
+      - name: Archive VSIX
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.pack.outputs.vsix-path }}
+          archive: false
+          if-no-files-found: error
+          retention-days: ${{ inputs.retention-days }}

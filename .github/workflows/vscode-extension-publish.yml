@@ -1,0 +1,198 @@
+name: VS Code Extension Publish
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        description: Node.js version selector
+        required: false
+        default: "24"
+        type: string
+      artifact-name:
+        description: Artifact of an earlier job of the calling workflow that is downloaded before the extension is built, such as helper binaries another workflow built. Leave empty to skip it
+        required: false
+        default: ''
+        type: string
+      artifact-path:
+        description: Directory, relative to the repository root, the artifact is downloaded into
+        required: false
+        default: .
+        type: string
+      check-command:
+        description: Command that runs the project's own checks after npm ci, such as linting and unit tests. Leave empty to skip it
+        required: false
+        default: ''
+        type: string
+      build-command:
+        description: Command that builds what vscode:prepublish does not, run after npm ci. Leave empty if vscode:prepublish builds everything
+        required: false
+        default: ''
+        type: string
+      test-command:
+        description: Command that runs the extension's tests in VS Code after the build, under a virtual display. Leave empty to skip the tests
+        required: false
+        default: ''
+        type: string
+      required-files:
+        description: Paths or glob patterns, one per line and relative to the extension root, that must each match a file in the VSIX. Leave empty to skip the check
+        required: false
+        default: ''
+        type: string
+      pack-dependencies:
+        description: Whether vsce packs the production dependencies from node_modules. Leave false for a bundled extension
+        required: false
+        default: false
+        type: boolean
+      vs-marketplace:
+        description: Whether the VSIX goes to the Visual Studio Marketplace, published by the app registration azure-client-id names
+        required: false
+        default: false
+        type: boolean
+      azure-client-id:
+        description: Application (client) id of the Microsoft Entra app registration that publishes to the Visual Studio Marketplace. Defaults to the one all Der-Floh and Florian-Noever extensions share
+        required: false
+        default: aec9c895-5809-48c2-bc4b-4fae5ffa90d2
+        type: string
+      azure-tenant-id:
+        description: Directory (tenant) id of that app registration
+        required: false
+        default: deee41e6-02c3-420a-8c53-52a2be70c101
+        type: string
+      open-vsx:
+        description: Whether the VSIX goes to Open VSX. Needs the OPEN_VSX_TOKEN secret, and Open VSX must have every extension in extensionDependencies
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      OPEN_VSX_TOKEN:
+        description: Open VSX access token of a member of the publisher's namespace
+        required: false
+
+jobs:
+  pack:
+    name: Pack
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    outputs:
+      vsix-path: ${{ steps.pack.outputs.vsix-path }}
+
+    steps:
+      - name: Resolve version
+        id: version
+        uses: Der-Floh/Der-Floh/.github/actions/resolve-version@v1
+        with:
+          tag: ${{ github.event.release.tag_name }}
+          allow-prerelease: "false"
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Verify Open VSX
+        if: ${{ inputs.open-vsx }}
+        uses: Der-Floh/Der-Floh/.github/actions/open-vsx-verify@v1
+        with:
+          token: ${{ secrets.OPEN_VSX_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          package-manager-cache: false
+
+      - name: Download artifact
+        if: ${{ inputs.artifact-name != '' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: ${{ inputs.artifact-path }}
+
+      - name: Pack
+        id: pack
+        uses: Der-Floh/Der-Floh/.github/actions/vsix-pack@v1
+        with:
+          version: ${{ steps.version.outputs.value }}
+          check-command: ${{ inputs.check-command }}
+          build-command: ${{ inputs.build-command }}
+          test-command: ${{ inputs.test-command }}
+          required-files: ${{ inputs.required-files }}
+          pack-dependencies: ${{ inputs.pack-dependencies }}
+          output-dir: artifacts
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v7
+        with:
+          name: vsix
+          path: ${{ steps.pack.outputs.vsix-path }}
+          if-no-files-found: error
+
+  release:
+    name: Upload to release
+    needs: pack
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Download VSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: vsix
+          path: artifacts
+
+      - name: Upload to release
+        uses: Der-Floh/Der-Floh/.github/actions/github-release-upload@v1
+        with:
+          files: ${{ needs.pack.outputs.vsix-path }}
+
+  vs-marketplace:
+    name: Visual Studio Marketplace
+    needs: [pack, release]
+    if: ${{ inputs.vs-marketplace && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    environment: vs-marketplace
+
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download VSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: vsix
+          path: artifacts
+
+      - name: Publish
+        uses: Der-Floh/Der-Floh/.github/actions/vs-marketplace-publish@v1
+        with:
+          vsix-path: ${{ needs.pack.outputs.vsix-path }}
+          azure-client-id: ${{ inputs.azure-client-id }}
+          azure-tenant-id: ${{ inputs.azure-tenant-id }}
+          node-version: ${{ inputs.node-version }}
+
+  open-vsx:
+    name: Open VSX
+    needs: [pack, release]
+    if: ${{ inputs.open-vsx && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+
+    permissions: {}
+
+    steps:
+      - name: Download VSIX
+        uses: actions/download-artifact@v8
+        with:
+          name: vsix
+          path: artifacts
+
+      - name: Publish
+        uses: Der-Floh/Der-Floh/.github/actions/open-vsx-publish@v1
+        with:
+          vsix-path: ${{ needs.pack.outputs.vsix-path }}
+          token: ${{ secrets.OPEN_VSX_TOKEN }}
+          node-version: ${{ inputs.node-version }}
