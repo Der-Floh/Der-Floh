@@ -1,19 +1,20 @@
 name: Pack Nexus Mod
-description: Builds and zips a mod, and checks that the zip, and optionally a version file inside it, carry the expected version
+description: Builds and zips one mod or several and, for one mod, checks that its zip, and optionally a version file inside it, carry the expected version
 
 inputs:
   package-name:
-    description: Name the zip starts with (e.g. my-mod gives my-mod-1.2.3.zip)
-    required: true
+    description: Name the zip of a single mod starts with (e.g. my-mod gives my-mod-1.2.3.zip). Leave empty for a build that zips several mods, whose zips are then not checked here
+    required: false
+    default: ''
   version:
-    description: Version the zip must carry (without v prefix)
+    description: Version the zip of a single mod must carry (without v prefix)
     required: true
   build-command:
-    description: Command that builds the mod and zips it into package-dir
+    description: Command that builds the mod, or the mods, and zips it into package-dir
     required: false
     default: npm ci && npm run package
   package-dir:
-    description: Directory the build command writes the zip to
+    description: Directory the build command writes the zips to
     required: false
     default: dist
   version-file:
@@ -23,7 +24,7 @@ inputs:
 
 outputs:
   package-path:
-    description: Path of the zipped mod
+    description: Path of the zipped mod. Empty when package-name is
     value: ${{ steps.zip.outputs.path }}
 
 runs:
@@ -35,6 +36,7 @@ runs:
 
     - name: Check zip
       id: zip
+      if: ${{ inputs.package-name != '' }}
       shell: bash
       env:
         PACKAGE_PATH: ${{ inputs.package-dir }}/${{ inputs.package-name }}-${{ inputs.version }}.zip
@@ -47,7 +49,7 @@ runs:
         echo "path=$PACKAGE_PATH" >> "$GITHUB_OUTPUT"
 
     - name: Check version file
-      if: ${{ inputs.version-file != '' }}
+      if: ${{ inputs.package-name != '' && inputs.version-file != '' }}
       shell: bash
       env:
         PACKAGE_PATH: ${{ steps.zip.outputs.path }}

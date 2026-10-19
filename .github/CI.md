@@ -30,11 +30,13 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `extension-pack` | extension | Builds with npm, lints with Mozilla's add-on linter, zips the extension and archives its sources |
 | `vsix-pack` | vscode-extension | Installs, optionally checks, builds and tests a VS Code extension, packs it with vsce and checks the VSIX's version and contents |
 | `vscode-test` | vscode-extension, `vsix-pack` | Runs a VS Code extension's tests under a virtual display |
-| `github-release-upload` | vscode-extension | Uploads files to the release that triggered the run and, in a public repository, attests them |
+| `github-release-upload` | vscode-extension, nexus | Uploads files to the release that triggered the run and, in a public repository, attests them |
 | `vs-marketplace-publish` | vscode-extension | Publishes a VSIX to the Visual Studio Marketplace through Microsoft Entra ID |
 | `open-vsx-verify` | vscode-extension | Checks the token, the namespace and the dependencies before anything is released |
 | `open-vsx-publish` | vscode-extension | Publishes a VSIX to Open VSX with a token |
-| `nexus-pack` | nexus | Builds and zips a mod, then checks the zip, and optionally a version file inside it, against the release version |
+| `nexus-pack` | nexus | Builds and zips one mod or several, then checks a single mod's zip, and optionally a version file inside it, against the release version |
+| `resolve-nexus-uploads` | nexus | Decides which zips go to the release and which of them go to which file on Nexus Mods, and checks their settings before anything is released |
+| `nexus-upload` | nexus | Adds a zip to a file on Nexus Mods as a new version, unless the file already has that version |
 | `tool-pack` | tool | Builds a .NET Framework app with MSBuild and checks that its exe carries the version and needs no other file |
 | `dependabot-merge` | dependabot | Merges a Dependabot minor or patch update, and leaves any other update for a review |
 
@@ -49,7 +51,7 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `extension-publish.yml` | Browser extension zip, uploaded, attested, then submitted to the Chrome Web Store and addons.mozilla.org |
 | `vscode-extension-ci.yml` | Optional checks and VS Code tests, and a checked preview VSIX |
 | `vscode-extension-publish.yml` | VSIX built and tested from the release tag, uploaded and, in a public repository, attested, then published to the Visual Studio Marketplace and Open VSX |
-| `nexus-publish.yml` | Mod zip, uploaded, attested, then added to its file on Nexus Mods as a new version |
+| `nexus-publish.yml` | One mod's zip, or every zip of a repository that builds several, uploaded and attested, then each added to its file on Nexus Mods as a new version unless that version is there already |
 | `tool-ci.yml` | MSBuild build of a .NET Framework app, kept as a preview exe |
 | `tool-publish.yml` | .NET Framework app built with MSBuild, its exe uploaded and attested |
 | `dependabot-automerge.yml` | Squash-merge a Dependabot minor or patch update once the other jobs of the calling workflow passed |
@@ -520,28 +522,53 @@ which must leave the mod zipped as `<package-name>-<version>.zip` in `package-di
 version. `version-file` names a JSON file inside the zip whose `version` must match as well,
 such as `info.json` for a Vortex extension, which is the version Vortex reads.
 
-The zip is uploaded to the release and attested. Unless the release is a prerelease, it then
-goes to **Nexus Mods** through [Nexus-Mods/upload-action](https://github.com/Nexus-Mods/upload-action)
-as a new version of the file `file-id` names, listed as `<file-name> v<version>`. By default
-the upload also sets the mod's version on Nexus Mods (`update-mod-version`), but doesn't make
-the file the default download for mod managers (`primary-mod-manager-download`), which the
-example turns on. `changelog` adds text to the mod's changelog for the version and needs
-`mod-id`; the example adds a link to the GitHub release, and
-`${{ github.event.release.body }}` would add the release notes themselves. The action has no
-test mode, so every run that gets this far uploads for real.
+The zip is uploaded to the release and attested. Unless the release is a prerelease, it then goes to **Nexus Mods** through [Nexus-Mods/upload-action](https://github.com/Nexus-Mods/upload-action) as a new version of the file `file-id` names, listed as `<file-name> v<version>`. By default the upload also sets the mod's version on Nexus Mods (`update-mod-version`), but doesn't make the file the default download for mod managers (`primary-mod-manager-download`), which the example turns on. `changelog` adds text to the mod's changelog for the version and needs `mod-id`; the example adds a link to the GitHub release, and `${{ github.event.release.body }}` would add the release notes themselves. The action has no test mode, so every run that gets this far uploads for real.
 
-Nexus Mods only receives **new versions** of a file the mod already has. Upload the first
-version by hand on the mod's *Manage Files* page; the file id and the mod id are then shown by
-the *Advanced* option on the mod's *Files* tab, or in the file's edit menu on *Manage Files*.
-Until `file-id` is set, the Nexus Mods job only leaves a notice, so passing it as a repository
-variable, as above, switches the upload on without editing the workflow; the example passes
-`mod-id` the same way. Once it is set, the
-run fails before releasing anything if `NEXUSMODS_API_KEY` is missing, or if `changelog` is set
-without `mod-id`.
+Before uploading, `nexus-upload` asks Nexus Mods which versions the file already has, and skips the upload when it has this one. So a failed Nexus Mods job can be retried with **Re-run failed jobs**, and no re-run adds a version twice; *Re-run all jobs* still rebuilds the zip and replaces it on the release, while Nexus Mods keeps the first build. The check uses an endpoint that Nexus Mods marks as experimental, like those the upload itself uses, and it fails the job instead of uploading whenever the answer is missing or in an unknown form; re-run the failed jobs once Nexus Mods answers again. Should an upload fail after Nexus Mods created the version but before the changelog was added, the re-run skips the version, so add that changelog by hand.
+
+Nexus Mods only receives **new versions** of a file the mod already has. Upload the first version by hand on the mod's *Manage Files* page, with the version exactly as the release names it, without the `v`, or the check won't recognise it; the file id and the mod id are then shown by the *Advanced* option on the mod's *Files* tab, or in the file's edit menu on *Manage Files*. Until `file-id` is set, the Pack job only leaves a notice and the Nexus Mods job is skipped, so passing it as a repository variable, as above, switches the upload on without editing the workflow; the example passes `mod-id` the same way. Once it is set, the run fails before releasing anything if `NEXUSMODS_API_KEY` is missing, or if `changelog` is set without `mod-id`.
 
 `NEXUSMODS_API_KEY` is a personal API key of the mod's author, from
 <https://www.nexusmods.com/settings/api-keys>. As for apps, the secret and the permissions
 block belong to the calling repository.
+
+### Several mods in one repository
+
+A repository that builds several mods passes `mods-file` instead of `package-name`, here for [coal-llc-mods](https://github.com/Der-Floh/coal-llc-mods), which attaches every mod it builds to the release but uploads only the author's own, those in `out/der_floh`, to Nexus Mods:
+
+```yaml
+jobs:
+  publish:
+    uses: Der-Floh/Der-Floh/.github/workflows/nexus-publish.yml@v1
+    with:
+      build-command: pwsh -NoProfile -File build/build.ps1 && pwsh -NoProfile -File build/validate.ps1
+      package-dir: out
+      mods-file: .github/nexus-mods.json
+      mods-dir: out/der_floh
+      primary-mod-manager-download: true
+      changelog: ${{ github.event.release.html_url }}
+    secrets:
+      NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+```
+
+The rest of `publish.yml` is the same as above. `mods-file` maps the package name of each mod, the name of its zip without `-<version>.zip`, to the settings a single mod passes as inputs:
+
+```json
+{
+    "der_floh-passive_drop_mod": {
+        "file-id": "1234567",
+        "mod-id": "1234567890123",
+        "file-name": "Passive Drop Mod",
+        "file-description": "Configurable chance for ore tiles to drop a PassiveUpgrade on destruction"
+    }
+}
+```
+
+- Every zip in `package-dir` and its subdirectories goes to the release as a file of its own. Release assets have no folders, so two zips of the same name fail the run.
+- Of these, the zips directly in `mods-dir`, by default `package-dir` itself, go to Nexus Mods when `mods-file` gives them a `file-id`; any other zip there leaves a notice, as a single mod without `file-id` does. Each one has to be named `<package-name>-<version>.zip` and is uploaded as the version in its name, not the release's, so the build has to make sure that this is the version inside the zip. It is also the version to type when uploading a mod's first version by hand.
+- `primary-mod-manager-download`, `update-mod-version` and `changelog` apply to every upload. The single-mod inputs `package-name`, `version-file`, `file-id`, `file-name`, `file-description` and `mod-id` fail the run together with `mods-file`.
+- The run fails before releasing anything when `mods-file` has settings for a mod that `mods-dir` has no zip of, or a setting it doesn't know, when `mods-dir` has two zips of one mod or a zip whose name carries no version, when Nexus Mods would refuse a name (at most 50 letters, digits, spaces and `_ ' ( ) . -`, version included), or when `changelog` is set and a mod has no `mod-id`.
+- Each mod gets a Nexus Mods job of its own, and one that fails doesn't cancel the others. A release usually changes only some of the mods, and the others are skipped since Nexus Mods already has their version. So bump a mod's version whenever its zip changes, or the new zip only reaches the release.
 
 ## Consuming: a tool
 

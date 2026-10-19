@@ -4,21 +4,32 @@ on:
   workflow_call:
     inputs:
       package-name:
-        description: Name of the released zip (e.g. my-mod gives my-mod-1.2.3.zip)
-        required: true
+        description: Name of the released zip of a repository that releases one mod (e.g. my-mod gives my-mod-1.2.3.zip). Leave empty when mods-file is set
+        required: false
+        default: ''
+        type: string
+      mods-file:
+        description: JSON file of a repository that releases several mods, which maps the package name of each mod, the name of its zip without -<version>.zip, to its Nexus Mods settings file-id, mod-id, file-name and file-description. Leave empty for a single mod
+        required: false
+        default: ''
         type: string
       build-command:
-        description: Command that builds the mod and zips it into package-dir
+        description: Command that builds the mod, or the mods, and zips it into package-dir
         required: false
         default: npm ci && npm run package
         type: string
       package-dir:
-        description: Directory the build command writes the zip to
+        description: Directory the build command writes the zip to. With mods-file, every zip in it and its subdirectories goes to the release
         required: false
         default: dist
         type: string
+      mods-dir:
+        description: Directory, inside package-dir, whose zips go to Nexus Mods when mods-file gives them a file id. Zips elsewhere in package-dir only go to the release. Defaults to package-dir
+        required: false
+        default: ''
+        type: string
       version-file:
-        description: JSON file inside the zip whose version field must match the release, such as info.json for a Vortex extension. Leave empty to skip the check
+        description: JSON file inside the zip of a single mod whose version field must match the release, such as info.json for a Vortex extension. Leave empty to skip the check
         required: false
         default: ''
         type: string
@@ -28,43 +39,43 @@ on:
         default: "24"
         type: string
       file-id:
-        description: Id of the file on Nexus Mods that each release adds a version to. Leave empty to skip Nexus Mods
+        description: Id of the file on Nexus Mods that each release of a single mod adds a version to. Leave empty to skip Nexus Mods
         required: false
         default: ''
         type: string
       file-name:
-        description: Name the file is listed under on Nexus Mods, followed by the version (e.g. My Mod gives My Mod v1.2.3). Leave empty to list it under the zip's name
+        description: Name a single mod's file is listed under on Nexus Mods, followed by the version (e.g. My Mod gives My Mod v1.2.3). Leave empty to list it under the zip's name
         required: false
         default: ''
         type: string
       file-description:
-        description: Description of the file on Nexus Mods
+        description: Description of a single mod's file on Nexus Mods
         required: false
         default: ''
         type: string
       primary-mod-manager-download:
-        description: Whether the file is the default download for mod managers
+        description: Whether each uploaded file is the default download for mod managers
         required: false
         default: false
         type: boolean
       update-mod-version:
-        description: Whether the mod's version on Nexus Mods is set to the released version
+        description: Whether each mod's version on Nexus Mods is set to the version uploaded to it
         required: false
         default: true
         type: boolean
       mod-id:
-        description: Id of the mod on Nexus Mods. Required when changelog is set
+        description: Id of a single mod on Nexus Mods. Required when changelog is set
         required: false
         default: ''
         type: string
       changelog:
-        description: Text added to the mod's changelog for the released version, such as the release notes. Requires mod-id
+        description: Text added to the changelog of each uploaded mod for its uploaded version, such as the release notes. Requires the mod id of every upload
         required: false
         default: ''
         type: string
     secrets:
       NEXUSMODS_API_KEY:
-        description: Nexus Mods API key of the mod's author
+        description: Nexus Mods API key of the mods' author
         required: false
 
 jobs:
@@ -76,8 +87,8 @@ jobs:
       contents: read
 
     outputs:
-      package-path: ${{ steps.pack.outputs.package-path }}
-      version: ${{ steps.version.outputs.value }}
+      uploads: ${{ steps.uploads.outputs.uploads }}
+      release-files: ${{ steps.uploads.outputs.release-files }}
 
     steps:
       - name: Resolve version
@@ -86,19 +97,27 @@ jobs:
         with:
           tag: ${{ github.event.release.tag_name }}
 
-      - name: Check Nexus Mods settings
-        if: ${{ inputs.file-id != '' && !github.event.release.prerelease }}
+      - name: Check inputs
         env:
-          NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+          PACKAGE_NAME: ${{ inputs.package-name }}
+          MODS_FILE: ${{ inputs.mods-file }}
+          MODS_DIR: ${{ inputs.mods-dir }}
+          VERSION_FILE: ${{ inputs.version-file }}
+          FILE_ID: ${{ inputs.file-id }}
+          FILE_NAME: ${{ inputs.file-name }}
+          FILE_DESCRIPTION: ${{ inputs.file-description }}
           MOD_ID: ${{ inputs.mod-id }}
-          CHANGELOG: ${{ inputs.changelog }}
         run: |
-          if [ -z "$NEXUSMODS_API_KEY" ]; then
-            echo "::error::file-id is set but the NEXUSMODS_API_KEY secret is not, so the upload to Nexus Mods would fail after the release."
+          if [ -n "$MODS_FILE" ] && [ -n "$PACKAGE_NAME$VERSION_FILE$FILE_ID$FILE_NAME$FILE_DESCRIPTION$MOD_ID" ]; then
+            echo "::error::mods-file is set together with package-name, version-file, file-id, file-name, file-description or mod-id, which only apply to a single mod. With mods-file, the settings of each mod come from that file."
             exit 1
           fi
-          if [ -n "$CHANGELOG" ] && [ -z "$MOD_ID" ]; then
-            echo "::error::changelog is set but mod-id is not, and Nexus Mods needs the mod id to add a changelog."
+          if [ -z "$MODS_FILE" ] && [ -z "$PACKAGE_NAME" ]; then
+            echo "::error::Neither package-name nor mods-file is set. Set package-name to the name of the released zip of a single mod, or mods-file for a repository that releases several."
+            exit 1
+          fi
+          if [ -z "$MODS_FILE" ] && [ -n "$MODS_DIR" ]; then
+            echo "::error::mods-dir is set but mods-file is not, and mods-dir only applies to the mods that mods-file lists."
             exit 1
           fi
 
@@ -120,11 +139,38 @@ jobs:
           package-dir: ${{ inputs.package-dir }}
           version-file: ${{ inputs.version-file }}
 
+      - name: Resolve uploads
+        id: uploads
+        uses: Der-Floh/Der-Floh/.github/actions/resolve-nexus-uploads@v1
+        with:
+          version: ${{ steps.version.outputs.value }}
+          package-dir: ${{ inputs.package-dir }}
+          package-name: ${{ inputs.package-name }}
+          package-path: ${{ steps.pack.outputs.package-path }}
+          file-id: ${{ inputs.file-id }}
+          mod-id: ${{ inputs.mod-id }}
+          file-name: ${{ inputs.file-name }}
+          file-description: ${{ inputs.file-description }}
+          mods-file: ${{ inputs.mods-file }}
+          mods-dir: ${{ inputs.mods-dir }}
+          changelog: ${{ inputs.changelog }}
+
+      - name: Check Nexus Mods settings
+        if: ${{ !github.event.release.prerelease && steps.uploads.outputs.uploads != '[]' }}
+        env:
+          NEXUSMODS_API_KEY: ${{ secrets.NEXUSMODS_API_KEY }}
+        run: |
+          if [ -z "$NEXUSMODS_API_KEY" ]; then
+            echo "::error::A file id is set but the NEXUSMODS_API_KEY secret is not, so the upload to Nexus Mods would fail after the release."
+            exit 1
+          fi
+
       - name: Upload mod
         uses: actions/upload-artifact@v7
         with:
           name: mod
-          path: ${{ steps.pack.outputs.package-path }}
+          # A wildcard makes package-dir the artifact's root, so zips in its subdirectories keep their paths when downloaded.
+          path: ${{ inputs.mods-file != '' && format('{0}/**/*.zip', inputs.package-dir) || steps.pack.outputs.package-path }}
           if-no-files-found: error
 
   release:
@@ -144,49 +190,42 @@ jobs:
           name: mod
           path: ${{ inputs.package-dir }}
 
-      - name: Upload to Release
-        uses: softprops/action-gh-release@v3
+      - name: Upload to release
+        uses: Der-Floh/Der-Floh/.github/actions/github-release-upload@v1
         with:
-          fail_on_unmatched_files: true
-          files: ${{ needs.pack.outputs.package-path }}
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: ${{ needs.pack.outputs.package-path }}
+          files: ${{ needs.pack.outputs.release-files }}
 
   nexus:
-    name: Nexus Mods
+    name: Nexus Mods (${{ matrix.package-name }})
     needs: [pack, release]
-    if: ${{ !github.event.release.prerelease }}
+    # An empty matrix fails the job, so it is skipped when nothing goes to Nexus Mods.
+    if: ${{ !github.event.release.prerelease && needs.pack.outputs.uploads != '[]' }}
     runs-on: ubuntu-latest
 
     permissions: {}
 
-    steps:
-      - name: Report missing file
-        if: ${{ inputs.file-id == '' }}
-        run: echo "::notice::file-id is not set, so nothing went to Nexus Mods. Upload the first version by hand on the mod's Manage Files page, then set the file id; later releases then add their versions to it automatically."
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.pack.outputs.uploads) }}
 
+    steps:
       - name: Download mod
-        if: ${{ inputs.file-id != '' }}
         uses: actions/download-artifact@v8
         with:
           name: mod
           path: ${{ inputs.package-dir }}
 
       - name: Upload to Nexus Mods
-        if: ${{ inputs.file-id != '' }}
-        uses: Nexus-Mods/upload-action@v1.0.0-beta.10
+        uses: Der-Floh/Der-Floh/.github/actions/nexus-upload@v1
         with:
-          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
-          file_id: ${{ inputs.file-id }}
-          filename: ${{ needs.pack.outputs.package-path }}
-          version: ${{ needs.pack.outputs.version }}
-          display_name: ${{ inputs.file-name && format('{0} v{1}', inputs.file-name, needs.pack.outputs.version) || '' }}
-          description: ${{ inputs.file-description }}
-          category: main
-          primary_mod_manager_download: ${{ inputs.primary-mod-manager-download }}
-          update_mod_version: ${{ inputs.update-mod-version }}
-          mod_id: ${{ inputs.mod-id }}
+          package-path: ${{ matrix.package-path }}
+          version: ${{ matrix.version }}
+          file-id: ${{ matrix.file-id }}
+          api-key: ${{ secrets.NEXUSMODS_API_KEY }}
+          display-name: ${{ matrix.display-name }}
+          description: ${{ matrix.description }}
+          primary-mod-manager-download: ${{ inputs.primary-mod-manager-download }}
+          update-mod-version: ${{ inputs.update-mod-version }}
+          mod-id: ${{ matrix.mod-id }}
           changelog: ${{ inputs.changelog }}

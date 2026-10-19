@@ -1,0 +1,99 @@
+name: Upload to Nexus Mods
+description: Adds a zip to a file on Nexus Mods as a new version, unless the file already has a version of that name
+
+inputs:
+  package-path:
+    description: Path of the zip to upload
+    required: true
+  version:
+    description: Version the zip is added as (without v prefix)
+    required: true
+  file-id:
+    description: Id of the file on Nexus Mods the version is added to
+    required: true
+  api-key:
+    description: Nexus Mods API key of the mod's author
+    required: true
+  display-name:
+    description: Name the version is listed under on Nexus Mods. Leave empty to list it under the zip's name
+    required: false
+    default: ''
+  description:
+    description: Description of the file on Nexus Mods
+    required: false
+    default: ''
+  primary-mod-manager-download:
+    description: Whether the file is the default download for mod managers
+    required: false
+    default: "false"
+  update-mod-version:
+    description: Whether the mod's version on Nexus Mods is set to the uploaded version
+    required: false
+    default: "true"
+  mod-id:
+    description: Id of the mod on Nexus Mods. Required when changelog is set
+    required: false
+    default: ''
+  changelog:
+    description: Text added to the mod's changelog for the uploaded version. Requires mod-id
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Check versions on Nexus Mods
+      id: versions
+      shell: bash
+      env:
+        NEXUSMODS_API_KEY: ${{ inputs.api-key }}
+        FILE_ID: ${{ inputs.file-id }}
+        VERSION: ${{ inputs.version }}
+        PACKAGE_PATH: ${{ inputs.package-path }}
+      run: |
+        response="$RUNNER_TEMP/nexus-file-versions.json"
+        if ! status="$(curl -sS --retry 3 --retry-connrefused --max-time 30 --header @- --output "$response" --write-out '%{http_code}' \
+            "https://api.nexusmods.com/v3/mod-files/$FILE_ID/versions" <<< "apikey: $NEXUSMODS_API_KEY")"; then
+          echo "::error::Nexus Mods did not answer when asked which versions file $FILE_ID has, so it is unclear whether it already has $VERSION. Re-run the failed jobs once it answers again."
+          exit 1
+        fi
+        case "$status" in
+          200)
+            ;;
+          401 | 403)
+            echo "::error::Nexus Mods refused NEXUSMODS_API_KEY when asked which versions file $FILE_ID has (HTTP $status). Set the secret to a current personal API key of the mod's author, then re-run the failed jobs."
+            exit 1
+            ;;
+          404)
+            echo "::error::Nexus Mods has no file $FILE_ID. Correct the file id for later releases, and upload $PACKAGE_PATH by hand for this one."
+            exit 1
+            ;;
+          *)
+            echo "::error::Nexus Mods answered HTTP $status when asked which versions file $FILE_ID has, so it is unclear whether it already has $VERSION. Re-run the failed jobs once it answers again."
+            exit 1
+            ;;
+        esac
+        if ! exists="$(jq --arg version "$VERSION" '.data.versions | if type == "array" then any(.[]; .version == $version) else error("no versions") end' "$response" 2> /dev/null)"; then
+          echo "::error::Nexus Mods listed the versions of file $FILE_ID in a form this action does not know, so it is unclear whether it already has $VERSION. The endpoint is experimental and may have changed; check the file on Nexus Mods and upload $PACKAGE_PATH by hand if $VERSION is missing."
+          exit 1
+        fi
+        if [ "$exists" = true ]; then
+          echo "::notice::File $FILE_ID on Nexus Mods already has version $VERSION, so $PACKAGE_PATH was not uploaded again."
+        fi
+        echo "exists=$exists" >> "$GITHUB_OUTPUT"
+
+    - name: Upload to Nexus Mods
+      if: ${{ steps.versions.outputs.exists == 'false' }}
+      uses: Nexus-Mods/upload-action@v1.0.0-beta.11
+      with:
+        api_key: ${{ inputs.api-key }}
+        file_id: ${{ inputs.file-id }}
+        filename: ${{ inputs.package-path }}
+        version: ${{ inputs.version }}
+        display_name: ${{ inputs.display-name }}
+        description: ${{ inputs.description }}
+        category: main
+        primary_mod_manager_download: ${{ inputs.primary-mod-manager-download }}
+        update_mod_version: ${{ inputs.update-mod-version }}
+        mod_id: ${{ inputs.mod-id }}
+        changelog: ${{ inputs.changelog }}

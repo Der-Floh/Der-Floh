@@ -1,0 +1,138 @@
+name: Resolve Nexus Uploads
+description: Decides which zips go to the release and which of them go to which file on Nexus Mods, and checks their settings before anything is released
+
+inputs:
+  version:
+    description: Version of the release (without v prefix), which a single mod is uploaded as
+    required: true
+  package-dir:
+    description: Directory the build wrote the zips to
+    required: true
+  package-name:
+    description: Name of the released zip of a single mod. Leave empty when mods-file is set
+    required: false
+    default: ''
+  package-path:
+    description: Path of the zip of a single mod
+    required: false
+    default: ''
+  file-id:
+    description: Id of the file on Nexus Mods that a single mod adds a version to. Leave empty to skip Nexus Mods
+    required: false
+    default: ''
+  mod-id:
+    description: Id of a single mod on Nexus Mods
+    required: false
+    default: ''
+  file-name:
+    description: Name a single mod's file is listed under on Nexus Mods, followed by the version. Leave empty to list it under the zip's name
+    required: false
+    default: ''
+  file-description:
+    description: Description of a single mod's file on Nexus Mods
+    required: false
+    default: ''
+  mods-file:
+    description: JSON file that maps the package name of each of several mods to its Nexus Mods settings file-id, mod-id, file-name and file-description. Leave empty for a single mod
+    required: false
+    default: ''
+  mods-dir:
+    description: Directory, inside package-dir, whose zips go to Nexus Mods when mods-file gives them a file id. Defaults to package-dir
+    required: false
+    default: ''
+  changelog:
+    description: Changelog text the uploads add. When it is set, every upload needs a mod id
+    required: false
+    default: ''
+
+outputs:
+  uploads:
+    description: JSON array of the zips that go to Nexus Mods, each with package-path, package-name, version, file-id, mod-id, display-name and description
+    value: ${{ steps.resolve.outputs.uploads }}
+  release-files:
+    description: Paths of the zips that go to the release, one per line
+    value: ${{ steps.resolve.outputs.release-files }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve uploads
+      id: resolve
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        PACKAGE_DIR: ${{ inputs.package-dir }}
+        PACKAGE_NAME: ${{ inputs.package-name }}
+        PACKAGE_PATH: ${{ inputs.package-path }}
+        FILE_ID: ${{ inputs.file-id }}
+        MOD_ID: ${{ inputs.mod-id }}
+        FILE_NAME: ${{ inputs.file-name }}
+        FILE_DESCRIPTION: ${{ inputs.file-description }}
+        MODS_FILE: ${{ inputs.mods-file }}
+        MODS_DIR: ${{ inputs.mods-dir }}
+        CHANGELOG: ${{ inputs.changelog }}
+      run: |
+        relative_sorted() {
+          xargs -0 -r realpath --relative-to=. -- | sort
+        }
+
+        if [ -n "$MODS_FILE" ]; then
+          single=false
+          mods_dir="${MODS_DIR:-$PACKAGE_DIR}"
+          for dir in "$PACKAGE_DIR" "$mods_dir"; do
+            if [ ! -d "$dir" ]; then
+              echo "::error::$dir does not exist, but the build has to leave the zips in it."
+              exit 1
+            fi
+          done
+          if ! settings="$(jq -c 'if type == "object" then . else error("not an object") end' "$MODS_FILE" 2> /dev/null)"; then
+            echo "::error::$MODS_FILE has to exist and hold a JSON object that maps the package name of each mod to its Nexus Mods settings."
+            exit 1
+          fi
+          # Hidden files are left out like upload-artifact leaves them out, so the release gets exactly the artifact's zips.
+          mapfile -t release_files < <(find "$PACKAGE_DIR" -type f -name '*.zip' -not -path '*/.*' -print0 | relative_sorted)
+          mapfile -t mod_zips < <(find "$mods_dir" -maxdepth 1 -type f -name '*.zip' -not -name '.*' -print0 | relative_sorted)
+          mods_dir="$(realpath --relative-to=. -- "$mods_dir")"
+          zips="$(jq -nc '[$ARGS.positional[] | {path: .}]' --args "${mod_zips[@]}")"
+        else
+          single=true
+          mods_dir=''
+          settings="$(jq -nc --arg package "$PACKAGE_NAME" --arg file_id "$FILE_ID" --arg mod_id "$MOD_ID" --arg file_name "$FILE_NAME" --arg file_description "$FILE_DESCRIPTION" \
+            '{($package): {"file-id": $file_id, "mod-id": $mod_id, "file-name": $file_name, "file-description": $file_description}}')"
+          release_files=("$PACKAGE_PATH")
+          zips="$(jq -nc --arg path "$PACKAGE_PATH" --arg package "$PACKAGE_NAME" --arg version "$VERSION" '[{path: $path, package: $package, version: $version}]')"
+        fi
+        if [ "${#release_files[@]}" -eq 0 ]; then
+          echo "::error::The build left no zip in $PACKAGE_DIR."
+          exit 1
+        fi
+
+        result="$(jq -n -f "$GITHUB_ACTION_PATH/resolve.jq" \
+          --argjson single "$single" \
+          --argjson settings "$settings" \
+          --argjson zips "$zips" \
+          --argjson release "$(jq -nc '$ARGS.positional' --args "${release_files[@]}")" \
+          --arg changelog "$CHANGELOG" \
+          --arg mods_file "$MODS_FILE" \
+          --arg mods_dir "$mods_dir" \
+          --arg package_dir "$PACKAGE_DIR")"
+
+        jq -r '.notices[] | "::notice::" + .' <<< "$result"
+        jq -r '.errors[] | "::error::" + .' <<< "$result"
+        if jq -e '.errors != []' <<< "$result" > /dev/null; then
+          exit 1
+        fi
+
+        echo "::group::Release files"
+        printf '%s\n' "${release_files[@]}"
+        echo "::endgroup::"
+        echo "::group::Nexus Mods uploads"
+        jq -r 'if .uploads == [] then "None" else .uploads[] | "\(."package-path") as version \(.version) of file \(."file-id"), listed as \(."display-name")" end' <<< "$result"
+        echo "::endgroup::"
+
+        {
+          echo "uploads=$(jq -c '.uploads' <<< "$result")"
+          echo "release-files<<RELEASE_FILES"
+          printf '%s\n' "${release_files[@]}"
+          echo "RELEASE_FILES"
+        } >> "$GITHUB_OUTPUT"
