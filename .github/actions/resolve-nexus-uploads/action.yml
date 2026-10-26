@@ -36,10 +36,6 @@ inputs:
     description: JSON file that maps the package name of each of several mods to its Nexus Mods settings file-id, mod-id, file-name and file-description. Leave empty for a single mod
     required: false
     default: ''
-  mods-dir:
-    description: Directory, inside package-dir, whose zips go to Nexus Mods when mods-file gives them a file id. Defaults to package-dir
-    required: false
-    default: ''
   changelog:
     description: Changelog text the uploads add. When it is set, every upload needs a mod id
     required: false
@@ -69,7 +65,6 @@ runs:
         FILE_NAME: ${{ inputs.file-name }}
         FILE_DESCRIPTION: ${{ inputs.file-description }}
         MODS_FILE: ${{ inputs.mods-file }}
-        MODS_DIR: ${{ inputs.mods-dir }}
         CHANGELOG: ${{ inputs.changelog }}
       run: |
         relative_sorted() {
@@ -78,25 +73,19 @@ runs:
 
         if [ -n "$MODS_FILE" ]; then
           single=false
-          mods_dir="${MODS_DIR:-$PACKAGE_DIR}"
-          for dir in "$PACKAGE_DIR" "$mods_dir"; do
-            if [ ! -d "$dir" ]; then
-              echo "::error::$dir does not exist, but the build has to leave the zips in it."
-              exit 1
-            fi
-          done
+          if [ ! -d "$PACKAGE_DIR" ]; then
+            echo "::error::$PACKAGE_DIR does not exist, but the build has to leave the zips in it."
+            exit 1
+          fi
           if ! settings="$(jq -c 'if type == "object" then . else error("not an object") end' "$MODS_FILE" 2> /dev/null)"; then
             echo "::error::$MODS_FILE has to exist and hold a JSON object that maps the package name of each mod to its Nexus Mods settings."
             exit 1
           fi
           # Hidden files are left out like upload-artifact leaves them out, so the release gets exactly the artifact's zips.
           mapfile -t release_files < <(find "$PACKAGE_DIR" -type f -name '*.zip' -not -path '*/.*' -print0 | relative_sorted)
-          mapfile -t mod_zips < <(find "$mods_dir" -maxdepth 1 -type f -name '*.zip' -not -name '.*' -print0 | relative_sorted)
-          mods_dir="$(realpath --relative-to=. -- "$mods_dir")"
-          zips="$(jq -nc '[$ARGS.positional[] | {path: .}]' --args "${mod_zips[@]}")"
+          zips="$(jq -nc '[$ARGS.positional[] | {path: .}]' --args "${release_files[@]}")"
         else
           single=true
-          mods_dir=''
           settings="$(jq -nc --arg package "$PACKAGE_NAME" --arg file_id "$FILE_ID" --arg mod_id "$MOD_ID" --arg file_name "$FILE_NAME" --arg file_description "$FILE_DESCRIPTION" \
             '{($package): {"file-id": $file_id, "mod-id": $mod_id, "file-name": $file_name, "file-description": $file_description}}')"
           release_files=("$PACKAGE_PATH")
@@ -114,7 +103,6 @@ runs:
           --argjson release "$(jq -nc '$ARGS.positional' --args "${release_files[@]}")" \
           --arg changelog "$CHANGELOG" \
           --arg mods_file "$MODS_FILE" \
-          --arg mods_dir "$mods_dir" \
           --arg package_dir "$PACKAGE_DIR")"
 
         jq -r '.notices[] | "::notice::" + .' <<< "$result"

@@ -534,17 +534,16 @@ block belong to the calling repository.
 
 ### Several mods in one repository
 
-A repository that builds several mods passes `mods-file` instead of `package-name`, here for [coal-llc-mods](https://github.com/Der-Floh/coal-llc-mods), which attaches every mod it builds to the release but uploads only the author's own, those in `out/der_floh`, to Nexus Mods:
+A repository that builds several mods passes `mods-file` instead of `package-name`, here for [coal-llc-mods](https://github.com/Der-Floh/coal-llc-mods), which builds the mods of each author into a folder of its own in `out`:
 
 ```yaml
 jobs:
   publish:
     uses: Der-Floh/Der-Floh/.github/workflows/nexus-publish.yml@v1
     with:
-      build-command: pwsh -NoProfile -File build/build.ps1 && pwsh -NoProfile -File build/validate.ps1
+      build-command: pwsh -NoProfile -File .vscode/build/build.ps1 && pwsh -NoProfile -File .vscode/build/validate.ps1
       package-dir: out
       mods-file: .github/nexus-mods.json
-      mods-dir: out/der_floh
       primary-mod-manager-download: true
       changelog: ${{ github.event.release.html_url }}
     secrets:
@@ -565,9 +564,9 @@ The rest of `publish.yml` is the same as above. `mods-file` maps the package nam
 ```
 
 - Every zip in `package-dir` and its subdirectories goes to the release as a file of its own. Release assets have no folders, so two zips of the same name fail the run.
-- Of these, the zips directly in `mods-dir`, by default `package-dir` itself, go to Nexus Mods when `mods-file` gives them a `file-id`; any other zip there leaves a notice, as a single mod without `file-id` does. Each one has to be named `<package-name>-<version>.zip` and is uploaded as the version in its name, not the release's, so the build has to make sure that this is the version inside the zip. It is also the version to type when uploading a mod's first version by hand.
+- Of these, the zips that `mods-file` gives a `file-id` also go to Nexus Mods; any other zip leaves a notice, as a single mod without `file-id` does. Every zip has to be named `<package-name>-<version>.zip`, and a mod is uploaded as the version in its name, not the release's, so the build has to make sure that this is the version inside the zip. It is also the version to type when uploading a mod's first version by hand.
 - `primary-mod-manager-download`, `update-mod-version` and `changelog` apply to every upload. The single-mod inputs `package-name`, `version-file`, `file-id`, `file-name`, `file-description` and `mod-id` fail the run together with `mods-file`.
-- The run fails before releasing anything when `mods-file` has settings for a mod that `mods-dir` has no zip of, or a setting it doesn't know, when `mods-dir` has two zips of one mod or a zip whose name carries no version, when Nexus Mods would refuse a name (at most 50 letters, digits, spaces and `_ ' ( ) . -`, version included), or when `changelog` is set and a mod has no `mod-id`.
+- The run fails before releasing anything when `mods-file` has settings for a mod that `package-dir` has no zip of, or a setting it doesn't know, when `package-dir` has two zips of one mod or a zip whose name carries no version, when Nexus Mods would refuse a name (at most 50 letters, digits, spaces and `_ ' ( ) . -`, version included), or when `changelog` is set and a mod has no `mod-id`.
 - Each mod gets a Nexus Mods job of its own, and one that fails doesn't cancel the others. A release usually changes only some of the mods, and the others are skipped since Nexus Mods already has their version. So bump a mod's version whenever its zip changes, or the new zip only reaches the release.
 
 ## Consuming: a tool

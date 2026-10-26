@@ -48,8 +48,6 @@ def missing_file_id_notice:
   end;
 
 def upload_errors:
-  (select(."package-path" | IN($release[]) | not)
-    | "\(."package-path") is not in \($package_dir), so it would go to Nexus Mods without being on the release."),
   (select(."file-id" | nexus_id | not)
     | "\(."file-id") is not a Nexus Mods file id. Check the file id of \(."package-name")."),
   (select(."mod-id" != "" and (."mod-id" | nexus_id | not))
@@ -73,9 +71,9 @@ def resolve:
         ($zips[] | select(has("package") | not)
           | "\(.path) is not named <package-name>-<version>.zip, so it is unclear which version of which mod it is."),
         ($identified | group_by(.package)[] | select(length > 1)
-          | "\($mods_dir) has \(length) zips of \(.[0].package): \(map(.path | basename) | join(", ")). Leave only the one to release."),
+          | "\($package_dir) has \(length) zips of \(.[0].package): \(map(.path) | join(", ")). Leave only the one to release."),
         ($mods | keys[] | . as $package | select($identified | any(.package == $package) | not)
-          | "\($mods_file) has settings for \($package), but \($mods_dir) has no zip of it."),
+          | "\($mods_file) has settings for \($package), but \($package_dir) has no zip of it."),
         ($uploads[] | upload_errors)
       ]
     };
