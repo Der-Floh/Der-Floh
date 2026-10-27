@@ -140,6 +140,7 @@ jobs:
             ${{ steps.pack.outputs.setup-path }}
             ${{ steps.zip.outputs.archive-path || steps.pack.outputs.portable-path }}
           if-no-files-found: error
+          retention-days: 3
 
   verify:
     name: Verify ${{ matrix.runtime }}

@@ -40,6 +40,7 @@ jobs:
           name: tool
           path: ${{ steps.pack.outputs.exe-path }}
           if-no-files-found: error
+          retention-days: 3
 
   release:
     name: Upload to release

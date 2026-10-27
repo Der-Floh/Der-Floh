@@ -111,6 +111,7 @@ jobs:
             ${{ steps.pack.outputs.extension-path }}
             ${{ steps.pack.outputs.source-path }}
           if-no-files-found: error
+          retention-days: 3
 
   release:
     name: Upload to release

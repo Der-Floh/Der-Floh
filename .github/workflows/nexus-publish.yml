@@ -161,6 +161,7 @@ jobs:
           # A wildcard makes package-dir the artifact's root, so zips in its subdirectories keep their paths when downloaded.
           path: ${{ inputs.mods-file != '' && format('{0}/**/*.zip', inputs.package-dir) || steps.pack.outputs.package-path }}
           if-no-files-found: error
+          retention-days: 3
 
   release:
     name: Upload to release
