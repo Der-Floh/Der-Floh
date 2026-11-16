@@ -1,0 +1,118 @@
+name: Publish Android App
+description: Installs the .NET Android workload and the Android SDK parts a project needs, publishes the project as one APK signed with a release keystore, and verifies the signature
+
+inputs:
+  project-path:
+    description: Android project to publish
+    required: true
+  version:
+    description: Version number stamped into the app (without v prefix)
+    required: true
+  apk-path:
+    description: Path of the APK to write. A relative path is resolved against the workspace
+    required: true
+  keystore-base64:
+    description: The keystore to sign with, base64-encoded. Line breaks and the header lines of certutil -encode are ignored
+    required: false
+    default: ''
+  keystore-password:
+    description: Password of the keystore
+    required: false
+    default: ''
+  key-alias:
+    description: Alias of the signing key in the keystore
+    required: false
+    default: ''
+  key-password:
+    description: Password of the signing key. In a PKCS12 keystore, which keytool creates by default, the key has the keystore's password
+    required: false
+    default: ''
+  allow-debug-key:
+    description: Signs with the debug key when no keystore is given, for builds that are not released. Without it, a missing keystore fails the step
+    required: false
+    default: 'false'
+
+outputs:
+  apk-path:
+    description: Absolute path of the APK
+    value: ${{ steps.publish.outputs.apk-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install the Android workload
+      shell: pwsh
+      run: |
+        dotnet workload install android
+        if ($LASTEXITCODE -ne 0) { throw "dotnet workload install failed with exit code $LASTEXITCODE." }
+
+    - name: Install the Android SDK parts
+      shell: pwsh
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+      run: |
+        dotnet build $env:PROJECT_PATH -t:InstallAndroidDependencies "-p:AndroidSdkDirectory=$env:ANDROID_HOME" -p:AcceptAndroidSDKLicenses=True -clp:ForceConsoleColor
+        if ($LASTEXITCODE -ne 0) { throw "Installing the Android SDK parts failed with exit code $LASTEXITCODE." }
+
+    - name: Publish
+      id: publish
+      shell: pwsh
+      env:
+        PROJECT_PATH: ${{ inputs.project-path }}
+        VERSION: ${{ inputs.version }}
+        APK_PATH: ${{ inputs.apk-path }}
+        KEYSTORE_BASE64: ${{ inputs.keystore-base64 }}
+        KEY_ALIAS: ${{ inputs.key-alias }}
+        ALLOW_DEBUG_KEY: ${{ inputs.allow-debug-key }}
+        # MSBuild reads the passwords from these variables, so they never appear on a command line.
+        ANDROID_SIGNING_STORE_PASS: ${{ inputs.keystore-password }}
+        ANDROID_SIGNING_KEY_PASS: ${{ inputs.key-password }}
+      run: |
+        $apkPath = [IO.Path]::GetFullPath($env:APK_PATH, $env:GITHUB_WORKSPACE)
+        if (Test-Path -LiteralPath $apkPath) { throw "$apkPath already exists." }
+        $publishDir = [IO.Path]::Combine($env:RUNNER_TEMP, 'publish', 'android')
+        $arguments = @($env:PROJECT_PATH, '-c', 'Release', "-p:Version=$env:VERSION", '-p:AndroidPackageFormat=apk', "-p:PublishDir=$publishDir/", '-clp:ForceConsoleColor')
+
+        $keystore = [IO.Path]::Combine($env:RUNNER_TEMP, 'release.keystore')
+        $isSigned = [bool]$env:KEYSTORE_BASE64
+        if ($isSigned) {
+            if (-not $env:ANDROID_SIGNING_STORE_PASS -or -not $env:KEY_ALIAS -or -not $env:ANDROID_SIGNING_KEY_PASS) {
+                throw 'A keystore needs keystore-password, key-alias and key-password as well.'
+            }
+            $base64 = (($env:KEYSTORE_BASE64 -split "`r?`n" | Where-Object { $_ -notmatch '^-----' }) -join '') -replace '\s', ''
+            [IO.File]::WriteAllBytes($keystore, [Convert]::FromBase64String($base64))
+            $arguments += '-p:AndroidKeyStore=true', "-p:AndroidSigningKeyStore=$keystore", "-p:AndroidSigningKeyAlias=$env:KEY_ALIAS",
+                '-p:AndroidSigningStorePass=env:ANDROID_SIGNING_STORE_PASS', '-p:AndroidSigningKeyPass=env:ANDROID_SIGNING_KEY_PASS'
+        } elseif ($env:ALLOW_DEBUG_KEY -ne 'true') {
+            throw 'No keystore was given to sign the APK. Pass keystore-base64 with its passwords and key alias, or allow-debug-key for a build that is not released.'
+        }
+
+        try {
+            dotnet publish @arguments
+            if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed with exit code $LASTEXITCODE." }
+        } finally {
+            if ($isSigned) { Remove-Item -LiteralPath $keystore -Force -ErrorAction SilentlyContinue }
+        }
+
+        $signed = @(Get-ChildItem -LiteralPath $publishDir -Filter '*-Signed.apk')
+        if ($signed.Count -ne 1) { throw "Expected one signed APK in $publishDir, found $($signed.Count)." }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $apkPath) | Out-Null
+        Copy-Item -LiteralPath $signed[0].FullName -Destination $apkPath
+        "apk-path=$apkPath" >> $env:GITHUB_OUTPUT
+
+    - name: Verify the signature
+      shell: pwsh
+      env:
+        APK_PATH: ${{ steps.publish.outputs.apk-path }}
+        IS_SIGNED: ${{ inputs.keystore-base64 != '' }}
+      run: |
+        $buildTools = Get-ChildItem -LiteralPath (Join-Path $env:ANDROID_HOME 'build-tools') -Directory |
+            Sort-Object { [version]($_.Name -replace '[^0-9.].*$', '') } -Descending | Select-Object -First 1
+        if (-not $buildTools) { throw "The Android SDK in $env:ANDROID_HOME has no build-tools." }
+        $apksigner = Join-Path $buildTools.FullName ($IsWindows ? 'apksigner.bat' : 'apksigner')
+        $certificates = & $apksigner verify --print-certs $env:APK_PATH
+        if ($LASTEXITCODE -ne 0) { throw "apksigner rejected $env:APK_PATH." }
+        $certificates | Where-Object { $_ -match 'certificate DN' } | ForEach-Object { Write-Host $_ }
+        if ($env:IS_SIGNED -eq 'true' -and ($certificates -match 'CN=Android Debug')) {
+            throw "$env:APK_PATH is signed with the debug key instead of the keystore."
+        }
