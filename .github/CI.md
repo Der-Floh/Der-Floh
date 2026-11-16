@@ -21,8 +21,9 @@ uses: Der-Floh/Der-Floh/.github/workflows/library-ci.yml@v1
 | `publish-nuget` | library | OIDC login and push of package + symbols |
 | `dotnet-publish` | app | Publishes a project for one runtime into a folder |
 | `setup-vpk` | app | Installs Velopack's `vpk` at a given version |
-| `velopack-pack` | app | Packs a published folder into a Velopack installer and, unless turned off, a portable archive |
+| `velopack-pack` | app | Packs a published folder for Windows, Linux or macOS into a Velopack installer and, unless turned off, a portable package |
 | `zip` | app | Zips the contents of a folder, or a list of files, into one archive, optionally inside a folder of the archive |
+| `tar` | app | Archives the contents of a folder into a `.tar.gz` that keeps file permissions, optionally inside a folder of the archive |
 | `verify-velopack` | app | Installs the setup silently, checks registration, uninstalls |
 | `resolve-winget-mode` | app | Decides create / update / skip |
 | `setup-wingetcreate` | app | Downloads and hash-verifies `wingetcreate.exe` |
@@ -226,6 +227,8 @@ released, so installed apps do not update themselves.
 `test-project` adds a `Test` job to `app-ci.yml`, which runs the tests the same way as for a library, so the repository needs the same `global.json` and `Microsoft.Testing.Extensions.TrxReport` reference.
 
 `shortcuts` sets where the installer creates shortcuts to the app: a comma separated list of `Desktop`, `StartMenuRoot`, `StartMenu` and `Startup`, or `None`. Left empty, Velopack creates them on the desktop and in the Start menu. A command-line app passes `None`, since its shortcut would only open a console window that closes again. Velopack doesn't add the app to `PATH` either, so a command-line app does that itself in its install and uninstall hooks. For a NativeAOT app `vpk` can't inspect `Main` and skips its check for `VelopackApp.Build().Run()`, so nothing catches a missing call.
+
+`app-publish.yml` releases Windows builds only. An app that also ships Linux or macOS builds calls the actions in its own publish workflow, as Cubiomes Viewer does: `dotnet-publish` and `velopack-pack` run on `ubuntu-latest` for `linux-x64` and on `macos-latest` for `osx-arm64` and `osx-x64`, since `vpk` only packs for the system it runs on. Linux gets `<package-name>-<runtime>.AppImage`, which is its only package, and macOS `<package-name>-<runtime>-Setup.pkg` and `<package-name>-<runtime>-Portable.zip`. `icon` gives both their icon as a PNG, from which macOS gets an `.icns` made; `categories` sets the Linux menu categories and `bundle-id` the macOS bundle identifier, while `splash-image` and `shortcuts` only apply to Windows. The macOS packages are not signed, so macOS asks before the app first starts. A command-line tool released next to the app is archived with `zip` on Windows and with `tar` elsewhere, which keeps the executable bit that a zip made on Windows loses.
 
 `plain-portable: true` makes the portable archive a zip of the published files instead of Velopack's portable package, whose launcher runs a command-line app in a window that closes right away. The files sit in a folder named after `package-name`, so extracting the archive gives that folder. The archive keeps its name, `<package-name>-<runtime>-Portable.zip`, and is uploaded and attested together with the setups once they are verified. Since it is the publish folder as it is, the project has to keep files it doesn't need to ship, such as `.pdb` files, out of it.
 

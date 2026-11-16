@@ -8,7 +8,7 @@ inputs:
 
 outputs:
   path:
-    description: Absolute path of the installed vpk.exe
+    description: Absolute path of the installed vpk, which is vpk.exe on Windows
     value: ${{ steps.install.outputs.path }}
 
 runs:
@@ -21,7 +21,7 @@ runs:
         TOOL_VERSION: ${{ inputs.version }}
       run: |
         $toolPath = Join-Path $env:RUNNER_TEMP "vpk-$env:TOOL_VERSION"
-        $exe = Join-Path $toolPath 'vpk.exe'
+        $exe = Join-Path $toolPath ($IsWindows ? 'vpk.exe' : 'vpk')
         if (-not (Test-Path -LiteralPath $exe)) {
             dotnet tool install vpk --version $env:TOOL_VERSION --tool-path $toolPath
             if ($LASTEXITCODE -ne 0) { throw "Installing vpk $env:TOOL_VERSION failed with exit code $LASTEXITCODE." }

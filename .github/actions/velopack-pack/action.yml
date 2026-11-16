@@ -1,5 +1,5 @@
 name: Velopack Pack
-description: Packs a published desktop project into a Velopack installer and, unless turned off, a portable archive
+description: Packs a published desktop project for Windows, Linux or macOS into a Velopack installer and, unless turned off, a portable package
 
 inputs:
   project-path:
@@ -9,40 +9,52 @@ inputs:
     description: Folder the project was published into for runtime
     required: true
   runtime:
-    description: Runtime identifier the project was published for (e.g. win-x64)
+    description: Runtime identifier the project was published for (e.g. win-x64, linux-x64, osx-arm64). vpk packs for the system it runs on, so the runner must run that system
     required: true
   version:
     description: Version number (without v prefix)
     required: true
   author:
-    description: Publisher shown in Apps & Features
+    description: Publisher shown in Apps & Features, and the author of the Linux and macOS packages
     required: false
     default: ''
   package-name:
     description: Package name without spaces. It names the install folder and the created files, so it must never change after the first release
     required: true
   splash-image:
-    description: Image shown while the installer runs. Leave empty for a plain progress bar
+    description: Windows only. Image shown while the installer runs. Leave empty for a plain progress bar
     required: false
     default: ''
   shortcuts:
-    description: Comma separated places the installer creates shortcuts to the app in (Desktop, StartMenuRoot, StartMenu, Startup), or None. Leave empty for Velopack's default, Desktop and StartMenuRoot
+    description: Windows only. Comma separated places the installer creates shortcuts to the app in (Desktop, StartMenuRoot, StartMenu, Startup), or None. Leave empty for Velopack's default, Desktop and StartMenuRoot
+    required: false
+    default: ''
+  icon:
+    description: Linux and macOS only. PNG icon of the package, from which macOS gets an .icns made; an .icns is used as it is. Windows takes the project's ApplicationIcon
+    required: false
+    default: ''
+  categories:
+    description: Linux only. freedesktop.org menu categories of the app, separated by semicolons (e.g. Utility)
+    required: false
+    default: ''
+  bundle-id:
+    description: macOS only. Apple bundle identifier of the app (e.g. io.github.der-floh.app). Leave empty for Velopack's default
     required: false
     default: ''
   portable:
-    description: Whether to also create Velopack's portable archive, which starts the app through a launcher of its own. Set false to zip the published files instead
+    description: Whether to also create Velopack's portable archive on Windows and macOS, which starts the app through a launcher of its own. Set false to zip the published files instead. Linux always gets its AppImage, its only package
     required: false
     default: 'true'
   output-dir:
-    description: Directory the installer and portable archive are written to
+    description: Directory the installer and portable package are written to
     required: true
 
 outputs:
   setup-path:
-    description: Absolute path of the created installer
+    description: Absolute path of the created installer, Setup.exe on Windows and Setup.pkg on macOS. Empty on Linux, which has no installer
     value: ${{ steps.pack.outputs.setup-path }}
   portable-path:
-    description: Absolute path of the created portable archive, empty when portable is false
+    description: Absolute path of the created portable package, Portable.zip on Windows and macOS and the AppImage on Linux. Empty when portable is false
     value: ${{ steps.pack.outputs.portable-path }}
 
 runs:
@@ -65,7 +77,7 @@ runs:
         $icon = if ($properties.ApplicationIcon) { [IO.Path]::GetFullPath($properties.ApplicationIcon, $properties.MSBuildProjectDirectory) } else { '' }
 
         "title=$($properties.Product)" >> $env:GITHUB_OUTPUT
-        "main-exe=$($properties.AssemblyName).exe" >> $env:GITHUB_OUTPUT
+        "assembly-name=$($properties.AssemblyName)" >> $env:GITHUB_OUTPUT
         "icon=$icon" >> $env:GITHUB_OUTPUT
         "velopack-version=$($velopack[0].Split('/')[1])" >> $env:GITHUB_OUTPUT
 
@@ -85,16 +97,47 @@ runs:
         VERSION: ${{ inputs.version }}
         RUNTIME: ${{ inputs.runtime }}
         PUBLISH_DIR: ${{ inputs.publish-dir }}
-        MAIN_EXE: ${{ steps.project.outputs.main-exe }}
+        ASSEMBLY_NAME: ${{ steps.project.outputs.assembly-name }}
         TITLE: ${{ steps.project.outputs.title }}
-        ICON: ${{ steps.project.outputs.icon }}
+        PROJECT_ICON: ${{ steps.project.outputs.icon }}
         SPLASH_IMAGE: ${{ inputs.splash-image }}
         SHORTCUTS: ${{ inputs.shortcuts }}
+        ICON: ${{ inputs.icon }}
+        CATEGORIES: ${{ inputs.categories }}
+        BUNDLE_ID: ${{ inputs.bundle-id }}
         PORTABLE: ${{ inputs.portable }}
         OUTPUT_DIR: ${{ inputs.output-dir }}
       run: |
+        function Get-MacIcon([string] $icon) {
+            if ([IO.Path]::GetExtension($icon) -eq '.icns') { return $icon }
+            $iconset = Join-Path $env:RUNNER_TEMP "$env:PACKAGE_NAME-$env:RUNTIME.iconset"
+            New-Item -ItemType Directory -Force -Path $iconset | Out-Null
+            foreach ($size in 16, 32, 128, 256, 512) {
+                foreach ($scale in 1, 2) {
+                    $name = $scale -eq 1 ? "icon_${size}x${size}.png" : "icon_${size}x${size}@2x.png"
+                    & sips -z ($size * $scale) ($size * $scale) $icon --out (Join-Path $iconset $name) | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw "sips could not scale $icon to $($size * $scale) pixels." }
+                }
+            }
+            $icns = Join-Path $env:RUNNER_TEMP "$env:PACKAGE_NAME-$env:RUNTIME.icns"
+            & iconutil -c icns $iconset -o $icns
+            if ($LASTEXITCODE -ne 0) { throw "iconutil could not make $icns from $icon." }
+            return $icns
+        }
+
         if (-not $env:PACKAGE_NAME) { throw "A package name is required." }
         if ($env:PORTABLE -notin 'true', 'false') { throw "portable must be true or false, not '$env:PORTABLE'." }
+        $system = switch -Wildcard ($env:RUNTIME) {
+            'win-*' { 'Windows' }
+            'linux-*' { 'Linux' }
+            'osx-*' { 'macOS' }
+            default { throw "$env:RUNTIME is not a Windows, Linux or macOS runtime." }
+        }
+        $runner = if ($IsWindows) { 'Windows' } elseif ($IsLinux) { 'Linux' } else { 'macOS' }
+        if ($system -ne $runner) { throw "vpk packs for the system it runs on, so $env:RUNTIME needs a $system runner, not a $runner one." }
+        if ($system -eq 'Linux' -and $env:PORTABLE -eq 'false') { throw "Linux has no installer, only the AppImage, so portable cannot be false for $env:RUNTIME." }
+        $icon = if ($env:ICON) { [IO.Path]::GetFullPath($env:ICON, $env:GITHUB_WORKSPACE) } else { '' }
+        if ($icon -and $system -ne 'Windows' -and -not (Test-Path -LiteralPath $icon)) { throw "The icon $icon does not exist." }
         $outputDir = [IO.Path]::GetFullPath($env:OUTPUT_DIR, $env:GITHUB_WORKSPACE)
 
         $arguments = @(
@@ -102,7 +145,7 @@ runs:
             '--packId', $env:PACKAGE_NAME,
             '--packVersion', $env:VERSION,
             '--packDir', [IO.Path]::GetFullPath($env:PUBLISH_DIR, $env:GITHUB_WORKSPACE),
-            '--mainExe', $env:MAIN_EXE,
+            '--mainExe', ($system -eq 'Windows' ? "$env:ASSEMBLY_NAME.exe" : $env:ASSEMBLY_NAME),
             '--packTitle', $env:TITLE,
             '--runtime', $env:RUNTIME,
             '--channel', $env:RUNTIME,
@@ -110,16 +153,30 @@ runs:
             '--outputDir', $outputDir
         )
         if ($env:AUTHOR) { $arguments += '--packAuthors', $env:AUTHOR }
-        if ($env:ICON) { $arguments += '--icon', $env:ICON }
-        if ($env:SPLASH_IMAGE) { $arguments += '--splashImage', [IO.Path]::GetFullPath($env:SPLASH_IMAGE, $env:GITHUB_WORKSPACE) }
-        if ($env:SHORTCUTS) { $arguments += '--shortcuts', $env:SHORTCUTS }
-        if ($env:PORTABLE -eq 'false') { $arguments += '--noPortable' }
+        switch ($system) {
+            'Windows' {
+                if ($env:PROJECT_ICON) { $arguments += '--icon', $env:PROJECT_ICON }
+                if ($env:SPLASH_IMAGE) { $arguments += '--splashImage', [IO.Path]::GetFullPath($env:SPLASH_IMAGE, $env:GITHUB_WORKSPACE) }
+                if ($env:SHORTCUTS) { $arguments += '--shortcuts', $env:SHORTCUTS }
+                if ($env:PORTABLE -eq 'false') { $arguments += '--noPortable' }
+            }
+            'Linux' {
+                if ($icon) { $arguments += '--icon', $icon }
+                if ($env:CATEGORIES) { $arguments += '--categories', $env:CATEGORIES }
+            }
+            'macOS' {
+                if ($icon) { $arguments += '--icon', (Get-MacIcon $icon) }
+                if ($env:BUNDLE_ID) { $arguments += '--bundleId', $env:BUNDLE_ID }
+                if ($env:PORTABLE -eq 'false') { $arguments += '--noPortable' }
+            }
+        }
 
         & $env:PACK_TOOL @arguments
         if ($LASTEXITCODE -ne 0) { throw "vpk pack failed with exit code $LASTEXITCODE." }
 
-        $setup = Join-Path $outputDir "$env:PACKAGE_NAME-$env:RUNTIME-Setup.exe"
-        $portable = if ($env:PORTABLE -eq 'true') { Join-Path $outputDir "$env:PACKAGE_NAME-$env:RUNTIME-Portable.zip" } else { '' }
+        $prefix = Join-Path $outputDir "$env:PACKAGE_NAME-$env:RUNTIME"
+        $setup = switch ($system) { 'Windows' { "$prefix-Setup.exe" } 'macOS' { "$prefix-Setup.pkg" } default { '' } }
+        $portable = if ($system -eq 'Linux') { "$prefix.AppImage" } elseif ($env:PORTABLE -eq 'true') { "$prefix-Portable.zip" } else { '' }
         foreach ($file in @($setup, $portable) | Where-Object { $_ }) {
             if (-not (Test-Path -LiteralPath $file)) { throw "vpk did not create $file." }
         }

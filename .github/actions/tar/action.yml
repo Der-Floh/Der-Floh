@@ -1,0 +1,57 @@
+name: Tar
+description: Archives the contents of a folder into one .tar.gz that keeps file permissions such as the executable bit, optionally inside a folder of the archive
+
+inputs:
+  path:
+    description: Folder whose contents are archived with their subfolders. A relative path is resolved against the workspace
+    required: true
+  archive:
+    description: Path of the .tar.gz archive to create. A relative path is resolved against the workspace
+    required: true
+  folder-name:
+    description: Name of the folder in the archive that holds everything, so that extracting the archive gives that folder. Leave empty to store everything at the archive's root
+    required: false
+    default: ''
+
+outputs:
+  archive-path:
+    description: Absolute path of the created archive
+    value: ${{ steps.tar.outputs.archive-path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Tar
+      id: tar
+      shell: bash
+      env:
+        SOURCE: ${{ inputs.path }}
+        ARCHIVE: ${{ inputs.archive }}
+        FOLDER_NAME: ${{ inputs.folder-name }}
+      run: |
+        set -euo pipefail
+        fail() { echo "::error::$1"; exit 1; }
+
+        [[ -n "$SOURCE" ]] || fail "No folder to archive was given."
+        [[ -d "$SOURCE" ]] || fail "$SOURCE is not a folder."
+        [[ -n "$(ls -A "$SOURCE")" ]] || fail "$SOURCE is empty."
+        [[ "$ARCHIVE" == *.tar.gz ]] || fail "$ARCHIVE does not end in .tar.gz."
+        if [[ -n "$FOLDER_NAME" && ( "$FOLDER_NAME" == *[/\\]* || "$FOLDER_NAME" == "." || "$FOLDER_NAME" == ".." ) ]]; then
+          fail "'$FOLDER_NAME' is not a valid folder name."
+        fi
+
+        mkdir -p "$(dirname "$ARCHIVE")"
+        archive="$(cd "$(dirname "$ARCHIVE")" && pwd)/$(basename "$ARCHIVE")"
+        [[ ! -e "$archive" ]] || fail "$archive already exists."
+
+        # macOS's tar would otherwise add an AppleDouble ._ file next to every file with extended attributes.
+        export COPYFILE_DISABLE=1
+        if [[ -n "$FOLDER_NAME" ]]; then
+          staging="$(mktemp -d)"
+          cp -R "$SOURCE" "$staging/$FOLDER_NAME"
+          tar -czf "$archive" -C "$staging" "$FOLDER_NAME"
+          rm -rf "${staging:?}"
+        else
+          tar -czf "$archive" -C "$SOURCE" .
+        fi
+        echo "archive-path=$archive" >> "$GITHUB_OUTPUT"
